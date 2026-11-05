@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+Lucid now saves the key bindings of the map only when it actually changes one, and only once your bindings have been loaded.
+
 ## 1.0.0
 
 First release. Lucid runs on WoW Forever (Interface 16001) and on Retail 12.1.5 (Interface 120105). After the installation

@@ -625,6 +625,7 @@ ns.Locales.deDE = {
     HELP_MAP = "/lucid map [on|off|status] - Lucid-Kartenmodus für die Weltkarte (Rahmen, schlankes Layout, Deckkraft)",
     HELP_MAP_PROBE = "/lucid map probe - Weltkarte prüfen (Aufbau, CVars, Schreibtests mit sofortiger Rückstellung; für die Fehlersuche)",
     MAP_STATUS = "Kartenmodus: an %s, Questliste %s, Rahmen %s, Größe %s %%, Deckkraft %s %%, Lage gehört einem anderen Addon: %s",
+    MAP_STATUS_KEYS = "Tasten: Belegung geladen: %s, Tastenabgleich vorgemerkt: %s",
     MAP_ON = "Kartenmodus an.",
     MAP_OFF = "Kartenmodus aus; Blizzard-Layout wiederhergestellt.",
     MAP_DEFERRED = "Im Kampf: die Änderung wird nach dem Kampf angewendet.",

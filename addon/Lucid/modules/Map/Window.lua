@@ -1069,6 +1069,9 @@ _G.BINDING_HEADER_LUCID = "Lucid"
 _G.BINDING_NAME_LUCID_MAP = L.MAP_BINDING
 _G.BINDING_NAME_LUCID_MAP_BIG = L.MAP_BINDING_BIG
 local pendingKeys = false
+-- Erst nach dem ersten UPDATE_BINDINGS ist die Belegung des Spielers sicher geladen: vorher wird nichts gelesen, gesetzt oder gespeichert
+-- (kommt das Ereignis nie, bleibt die Tastenuebernahme aus; die Karte selbst laeuft weiter).
+local bindingsReady = false
 
 local function bindingsAvailable()
     return type(_G.GetBindingKey) == "function" and type(_G.SetBinding) == "function" and type(_G.GetBindingAction) == "function"
@@ -1115,26 +1118,33 @@ local function releaseKeys()
     local set = currentSet()
     local rec = all[set]
     if type(rec) ~= "table" then Store.db.mapBindings = next(all) and all or nil return end
+    local changed = false
     for key, prev in pairs(rec) do
         local cur = bound(key)
         if cur == ACTION or cur == ACTION_BIG then -- nur zurueck, was noch Lucids ist (zwischenzeitlich umbelegte Tasten bleiben)
-            if type(prev) == "string" and prev ~= "" then pcall(_G.SetBinding, key, prev) else pcall(_G.SetBinding, key) end
+            local ok, res
+            if type(prev) == "string" and prev ~= "" then ok, res = pcall(_G.SetBinding, key, prev) else ok, res = pcall(_G.SetBinding, key) end
+            if ok and res then changed = true end
         end
     end
     all[set] = nil
     Store.db.mapBindings = next(all) and all or nil
-    saveBindings()
+    if changed then saveBindings() end
 end
 
 local function takeKeys()
     local all = records()
     local set = currentSet()
     local rec = all[set] or {}
+    local changed = false
     local function take(key, action)
         local cur = bound(key)
         if cur ~= action then
-            if rec[key] == nil then rec[key] = cur end
-            pcall(_G.SetBinding, key, action)
+            local ok, res = pcall(_G.SetBinding, key, action)
+            if ok and res then
+                changed = true
+                if rec[key] == nil then rec[key] = cur end -- nur eintragen, was wirklich uebernommen wurde
+            end
         end
     end
     local keys = { _G.GetBindingKey("TOGGLEWORLDMAP") }
@@ -1147,15 +1157,17 @@ local function takeKeys()
             if not key:find("-", 1, true) then take("SHIFT-" .. key, ACTION_BIG) end
         end
     end
-    all[set] = rec
-    Store.db.mapBindings = all
-    saveBindings()
+    if next(rec) ~= nil then
+        all[set] = rec
+        Store.db.mapBindings = all
+    end
+    if changed then saveBindings() end
 end
 
 --- Tastenuebernahme dem Profil angleichen (nur ausserhalb des Kampfs)
 function Map.SyncKeys()
     if not bindingsAvailable() or not Store.db then return end
-    if inCombat() then pendingKeys = true return end
+    if not bindingsReady or inCombat() then pendingKeys = true return end
     pendingKeys = false
     local ok, err = pcall(function()
         local cfg = Map.GetConfig()
@@ -1307,7 +1319,7 @@ function Map.IsPending() return pending end
 --- Zustand fuer Tests/Diagnose
 function Map.State()
     return { engaged = last.engaged, external = last.external, touched = touched, pending = pending, hidden = last.hidden,
-        border = last.border, questOpen = Map.questOpen == true, bypass = bypass, pendingKeys = pendingKeys, lastToggle = Map.lastToggle }
+        border = last.border, questOpen = Map.questOpen == true, bypass = bypass, pendingKeys = pendingKeys, bindingsReady = bindingsReady, lastToggle = Map.lastToggle }
 end
 function Map.Parts() return host, border, buttons, qbtn, grips end
 
@@ -1327,6 +1339,12 @@ ns.RegisterModule("map", {
 
 Compat.TryOn("PLAYER_REGEN_ENABLED", function()
     if pending then Map.Apply() end
+    if pendingKeys then Map.SyncKeys() end
+end)
+-- Belegung geladen: Nachholen, falls vorher etwas anstand. Eigene SetBinding-Aufrufe loesen das Ereignis erneut aus; das ist
+-- harmlos, weil nur bei vorgemerktem Abgleich gearbeitet wird und ein Abgleich ohne Aenderung nichts setzt und nichts speichert.
+Compat.TryOn("UPDATE_BINDINGS", function()
+    bindingsReady = true
     if pendingKeys then Map.SyncKeys() end
 end)
 Compat.TryOn("PLAYER_ENTERING_WORLD", function() if modEnabled then ensureHooks() Map.Apply() Map.SyncKeys() end end)
@@ -1353,6 +1371,7 @@ ns.commands.map = function(rest)
         local cfg = Map.GetConfig()
         ns.Print(L.MAP_STATUS, cfg.enabled and L.NP_YES or L.NP_NO, cfg.questLog, cfg.border, cfg.scale, cfg.alpha,
             Map.ExternalPlacement(cfg) and L.NP_YES or L.NP_NO)
+        ns.Print(L.MAP_STATUS_KEYS, bindingsReady and L.NP_YES or L.NP_NO, pendingKeys and L.NP_YES or L.NP_NO)
     elseif sub == "on" or sub == "an" then enable(true)
     elseif sub == "off" or sub == "aus" then enable(false)
     elseif Map.sub[sub] then Map.sub[sub]()

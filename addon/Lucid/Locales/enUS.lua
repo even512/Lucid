@@ -625,6 +625,7 @@ ns.Locales.enUS = {
     HELP_MAP = "/lucid map [on|off|status] - Lucid map mode for the world map (frame, slim layout, opacity)",
     HELP_MAP_PROBE = "/lucid map probe - check the world map (structure, CVars, write tests with immediate restore; for troubleshooting)",
     MAP_STATUS = "Map mode: on %s, quest list %s, frame %s, scale %s %%, opacity %s %%, position owned by another addon: %s",
+    MAP_STATUS_KEYS = "Keys: bindings loaded: %s, key sync pending: %s",
     MAP_ON = "Map mode on.",
     MAP_OFF = "Map mode off; Blizzard layout restored.",
     MAP_DEFERRED = "In combat: the change is applied after combat.",
