@@ -673,7 +673,12 @@ end
 -- Blizzard verankert sie am oberen rechten Rand der Kartenflaeche; mit Lucids Knopf und Eck-Griff liegen sie uebereinander.
 -- Kleine, sichtbare, oben rechts verankerte Overlay-Knoepfe werden in einer Reihe (urspruengliche Reihenfolge) links von Lucids
 -- Knopf gesetzt; die Ursprungsanker merkt orig.overlay, der Ruecksprung stellt sie wieder her. Nur ausserhalb des Kampfs (Aufrufer).
+-- Der Filterknopf (WorldMapTrackingOptionsButton, mit rotem Zuruecksetzen-X als Kind) wird zusaetzlich erkannt, wenn er nicht oben
+-- rechts an der Kartenflaeche haengt: WoW Forever verankert ihn in der Navigationsleiste (Hinweis in Questies WorldMapButton.lua),
+-- also in der von Lucid ausgeblendeten Kopfzeile -- dort schwebte er ueber dem sichtbaren Rahmen. Fremde Addons, die den Anker
+-- danach neu setzen (z. B. Krowis Kartenknopf-Bibliothek), werden nachgezogen.
 local OVERLAY_MAX = 64
+local FILTER_SIZE = 32 -- Annahme, solange der Filterknopf noch keine Groesse meldet
 local function pointsOf(f)
     local pts = {}
     for i = 1, 8 do
@@ -689,7 +694,41 @@ local function restoreOverlay(f, pts)
     for _, p in ipairs(pts) do try(f, "SetPoint", p[1], p[2], p[3], p[4], p[5]) end
 end
 
-local overlayHooked = {}
+local placed = setmetatable({}, { __mode = "k" }) -- Overlay-Knopf -> { rel, x, y }: was Lucid zuletzt gesetzt hat
+
+--- Knopf zurueck an seinen Ursprung (Anker und Ebene) und aus der Reihe nehmen
+local function releaseOverlay(f, pts)
+    restoreOverlay(f, pts)
+    placed[f] = nil
+    local lv = orig and orig.overlayLevel and orig.overlayLevel[f]
+    if lv then
+        try(f, "SetFrameLevel", lv)
+        orig.overlayLevel[f] = nil
+    end
+end
+
+--- Filterknopf von Blizzard (Optionsmenue "Anzeigen: Questziele ...", rotes X als Kind)? Erkennung wie Krowis Bibliothek ueber die
+--- Vorlage (OnLoad aus WorldMapTrackingOptionsButtonMixin), dazu der globale Name und das X-Kind.
+local function isFilterButton(f)
+    if f == _G.WorldMapTrackingOptionsButton then return true end
+    local mix = _G.WorldMapTrackingOptionsButtonMixin
+    if type(mix) == "table" and type(mix.OnLoad) == "function" and f.OnLoad == mix.OnLoad then return true end
+    return type(f.ResetButton) == "table"
+end
+
+--- haengt rel in der Kopfzeile (NavBar, Rahmen, Titelplatzhalter), die Lucid ausblendet?
+local function inHeader(m, rel)
+    local cur = rel
+    for _ = 1, 4 do
+        if type(cur) ~= "table" or cur == m then return false end
+        if cur == m.NavBar or cur == m.BorderFrame or cur == m.TitleCanvasSpacerFrame then return true end
+        local ok, par = try(cur, "GetParent")
+        cur = ok and par or nil
+    end
+    return false
+end
+
+local overlayHooked, placeHooked = {}, {}
 function hookOverlay(f)
     if overlayHooked[f] or type(f.HookScript) ~= "function" then return end
     overlayHooked[f] = true
@@ -702,21 +741,78 @@ function hookOverlay(f)
     pcall(f.HookScript, f, "OnHide", again)
 end
 
+--- Setzt ein anderes Addon den Anker eines von Lucid platzierten Knopfs neu, zieht Lucid die Reihe nach (im Kampf: vormerken)
+local function hookPlacement(f)
+    if placeHooked[f] or type(f.SetPoint) ~= "function" then return end
+    placeHooked[f] = true
+    pcall(hooksecurefunc, f, "SetPoint", function(self)
+        if own or sizing or not touched then return end
+        local want = placed[self]
+        if not want then return end
+        local pts = pointsOf(self)
+        local p = pts[1]
+        if #pts == 1 and p[1] == "TOPRIGHT" and p[2] == want.rel and math.abs((Compat.Num(p[4]) or 0) - want.x) < 0.05
+            and math.abs((Compat.Num(p[5]) or 0) - want.y) < 0.05 then return end
+        if inCombat() then pending = true return end
+        Map.Relayout()
+    end)
+end
+
+--- Kandidaten: overlayFrames in Blizzards Reihenfolge, dazu der Filterknopf, falls er dort fehlt (Kind der Karte oder der Kopfzeile)
+local function overlayCandidates(m)
+    local cand, seen = {}, {}
+    local function add(f, i)
+        if type(f) == "table" and not seen[f] then
+            seen[f] = true
+            cand[#cand + 1] = { f = f, i = i }
+        end
+    end
+    if type(m.overlayFrames) == "table" then
+        for i, f in ipairs(m.overlayFrames) do add(f, i) end
+    end
+    local n = 1000
+    for _, owner in ipairs({ m, m.NavBar }) do
+        if type(owner) == "table" and type(owner.GetChildren) == "function" then
+            for _, c in ipairs({ owner:GetChildren() }) do
+                if type(c) == "table" and c ~= host and c ~= m.ScrollContainer and isFilterButton(c) then
+                    n = n + 1
+                    add(c, n)
+                end
+            end
+        end
+    end
+    add(_G.WorldMapTrackingOptionsButton, n + 1)
+    return cand
+end
+
 function arrangeOverlays(m, u, t, r, used)
     orig.overlay = orig.overlay or {}
+    local cand = overlayCandidates(m)
+    local filters = {}
+    for _, e in ipairs(cand) do if isFilterButton(e.f) then filters[e.f] = true end end
     local picked = {}
-    if type(m.overlayFrames) == "table" then
-        for i, f in ipairs(m.overlayFrames) do
-            if type(f) == "table" and f ~= m.SidePanelToggle and f ~= host and f ~= qbtn then
-                local known = orig.overlay[f]
-                local okS, shown = try(f, "IsShown")
-                local w, h = frameSize(f)
-                hookOverlay(f)
-                if okS and Compat.Bool(shown) and w > 0 and h > 0 and w <= OVERLAY_MAX and h <= OVERLAY_MAX then
-                    local pts = known or pointsOf(f)
-                    if pts[1] and pts[1][1] == "TOPRIGHT" then
+    for _, e in ipairs(cand) do
+        local f = e.f
+        if f ~= m.SidePanelToggle and f ~= host and f ~= qbtn then
+            local known = orig.overlay[f]
+            local okS, shown = try(f, "IsShown")
+            local w, h = frameSize(f)
+            local filter = filters[f] == true
+            if filter and (w <= 0 or h <= 0) then w, h = FILTER_SIZE, FILTER_SIZE end
+            hookOverlay(f)
+            if okS and Compat.Bool(shown) and w > 0 and h > 0 and w <= OVERLAY_MAX and h <= OVERLAY_MAX then
+                local pts = known or pointsOf(f)
+                local p1 = pts[1]
+                if p1 then
+                    local pt = p1[1]
+                    -- oben rechts (wie bisher); der Filterknopf mit jedem Anker; rechts in der Kopfzeile (Navigationsleiste)
+                    local right = pt == "TOPRIGHT" or filter
+                        or ((pt == "RIGHT" or pt == "BOTTOMRIGHT") and inHeader(m, p1[2]))
+                    -- am Filterknopf haengende Teile (X) folgen ihm von selbst
+                    local follows = not filter and type(p1[2]) == "table" and filters[p1[2]] == true
+                    if right and not follows then
                         if not known then orig.overlay[f] = pts end
-                        picked[#picked + 1] = { f = f, i = i, x = Compat.Num(pts[1][4]) or 0, w = w }
+                        picked[#picked + 1] = { f = f, i = e.i, x = Compat.Num(p1[4]) or 0, w = w }
                     end
                 end
             end
@@ -726,19 +822,32 @@ function arrangeOverlays(m, u, t, r, used)
     table.sort(picked, function(a, c) if a.x ~= c.x then return a.x > c.x end return a.i < c.i end)
     local x = -r - used / u
     local keep = {}
+    local _, hostLvl = try(host, "GetFrameLevel")
+    hostLvl = Compat.Num(hostLvl) or 1
+    orig.overlayLevel = orig.overlayLevel or {}
     for _, e in ipairs(picked) do
         local f = e.f
         keep[f] = true
         local _, sc = try(f, "GetScale")
         sc = Compat.Num(sc) or 1
         if sc <= 0 then sc = 1 end
+        local px, py = x / sc, (-t - ROW_Y / u) / sc
         try(f, "ClearAllPoints")
-        try(f, "SetPoint", "TOPRIGHT", m, "TOPRIGHT", x / sc, (-t - ROW_Y / u) / sc)
+        try(f, "SetPoint", "TOPRIGHT", m, "TOPRIGHT", px, py)
+        placed[f] = { rel = m, x = px, y = py }
+        hookPlacement(f)
+        -- ueber Lucids Zieh-Leisten (Kinder des Rahmens), damit der Knopf samt X anklickbar bleibt
+        local _, lv = try(f, "GetFrameLevel")
+        lv = Compat.Num(lv)
+        if lv and lv < hostLvl + 6 then
+            if orig.overlayLevel[f] == nil then orig.overlayLevel[f] = lv end
+            try(f, "SetFrameLevel", hostLvl + 6)
+        end
         x = x - e.w * sc - GAP / u
     end
     for f, pts in pairs(orig.overlay) do
         if not keep[f] then
-            restoreOverlay(f, pts)
+            releaseOverlay(f, pts)
             orig.overlay[f] = nil
         end
     end
@@ -900,7 +1009,7 @@ local function revert(m)
         try(m, "SetAlpha", orig.alpha)
         sweep(m, false)
         tameOpenMap(m, false)
-        for f, pts in pairs(orig.overlay or {}) do restoreOverlay(f, pts) end
+        for f, pts in pairs(orig.overlay or {}) do releaseOverlay(f, pts) end
         if not orig.movable then try(m, "SetMovable", false) end
         for name, was in pairs(orig.hidden) do
             local part = orig.parts and orig.parts[name]

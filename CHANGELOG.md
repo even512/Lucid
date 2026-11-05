@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2
+
+In map mode the map filter button with its red reset X now sits inside the map frame, left of Lucid's quest list button, instead of floating above the frame on WoW Forever, and it stays there when another addon moves it.
+
 ## 1.0.1
 
 Lucid now saves the key bindings of the map only when it actually changes one, and only once your bindings have been loaded.
