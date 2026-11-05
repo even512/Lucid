@@ -1,0 +1,19 @@
+{
+  "name": "lucid",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lucid: Immersions-Suite als WoW-Addon (Forever + Retail) mit Node-Hilfsskripten",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node scripts/check-lua.mjs",
+    "install-addon": "node scripts/install-addon.mjs"
+  },
+  "devDependencies": {
+    "fengari": "^0.1.5",
+    "luaparse": "^0.3.1",
+    "vitest": "^5.0.3"
+  }
+}

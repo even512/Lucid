@@ -1,0 +1,61 @@
+## Interface: 120105, 16001
+## Title: Lucid
+## Notes: Immersion UI suite: fades the interface while you do not need it, cinematic zone text, minimap, world map, nameplates and camera.
+## Notes-deDE: Immersions-Oberfläche: blendet die Oberfläche aus, solange du sie nicht brauchst. Dazu cinematischer Zonentext, Minimap, Weltkarte, Plaketten und Kamera.
+## Author: EveN
+## IconTexture: Interface\AddOns\Lucid\Media\icon
+## Version: @project-version@
+## X-License: MIT (graphics and media: all rights reserved, see LICENSE)
+## X-Website: https://github.com/even512/Lucid
+## SavedVariables: LucidDB
+## Category: Interface Enhancements
+## Category-deDE: Interfaceverbesserungen
+
+Locales\enUS.lua
+Locales\deDE.lua
+modules\Zone\Ornaments.lua
+Core.lua
+Compat.lua
+Store.lua
+State.lua
+Fader.lua
+modules\Hide\MinimapExtras.lua
+modules\Hide\Elements.lua
+modules\Hide\InkDock.lua
+modules\Hide\Presets.lua
+modules\Chat\Glass.lua
+modules\Minimap\Frames.lua
+FrameBorder.lua
+modules\Minimap\Shape.lua
+modules\Minimap\Cleanup.lua
+modules\Minimap\Frame.lua
+modules\Minimap\Elements.lua
+modules\Minimap\Icons.lua
+modules\Minimap\Button.lua
+CVarDriver.lua
+modules\Nameplates\CVars.lua
+modules\Nameplates\Plates.lua
+modules\Nameplates\Nameplates.lua
+modules\Nameplates\Probe.lua
+modules\Camera\CVars.lua
+modules\Camera\Camera.lua
+modules\Camera\Zoom.lua
+modules\Camera\Offset.lua
+modules\Camera\Probe.lua
+modules\Map\Window.lua
+modules\Map\Probe.lua
+modules\Zone\Zone.lua
+modules\Zone\Discovery.lua
+modules\Zone\Card.lua
+modules\Zone\Move.lua
+UI\ConfigWidgets.lua
+UI\Config.lua
+UI\ConfigHide.lua
+UI\ConfigChat.lua
+UI\ConfigZone.lua
+UI\ConfigMinimap.lua
+UI\ConfigNameplates.lua
+UI\ConfigCamera.lua
+UI\ConfigMap.lua
+UI\ConfigProfiles.lua
+UI\ConfigSettings.lua

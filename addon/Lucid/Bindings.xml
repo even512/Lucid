@@ -1,0 +1,8 @@
+<Bindings>
+    <Binding name="LUCID_MAP" header="LUCID" category="ADDONS">
+        if LucidToggleMap then LucidToggleMap() end
+    </Binding>
+    <Binding name="LUCID_MAP_BIG" category="ADDONS">
+        if LucidToggleMapBig then LucidToggleMapBig() end
+    </Binding>
+</Bindings>
