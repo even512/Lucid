@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3
+
+The map key no longer changes your saved key bindings; it uses a temporary override. If an earlier version put Lucid's map action on a key, Lucid restores that key once, a few seconds after you enter the world. Shift plus the map key opens Blizzard's large map only if that combination is free. A key that has another action, such as the default Shift+M for the battlefield map, keeps it; you can bind the large map to a key of your own under Key Bindings > AddOns.
+
 ## 1.0.2
 
 In map mode the map filter button with its red reset X now sits inside the map frame, left of Lucid's quest list button, instead of floating above the frame on WoW Forever, and it stays there when another addon moves it.

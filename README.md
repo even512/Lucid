@@ -36,8 +36,8 @@ text, and you can drag it along the edge.
 
 World map. The Lucid map mode turns the world map into a slim window in the same frame style, with a choice of hiding the
 header and Blizzard's window frame, a quest list that is hidden, collapsible or always shown, opacity, and a lower opacity
-while you move. The map key can open it, and Blizzard's large map moves to Shift plus the key. Both keys are listed under
-Lucid in the key bindings. The map's content and its pins stay as they are. If Open Map is installed, Lucid can place
+while you move. The map key can open it, and Blizzard's large map is on Shift plus the key if that combination is free.
+Both are listed under Lucid in the key bindings. The map's content and its pins stay as they are. If Open Map is installed, Lucid can place
 and scale the window through its settings or leave that to Open Map.
 
 Nameplates. Lucid shows nameplates only in the states you pick, for example in combat or with a target, and can always show
@@ -102,8 +102,9 @@ outside the rectangle at the top and bottom.
 
 Everything stays on your computer. Lucid uses no network and sends no addon messages. The settings are saved in the
 account-wide SavedVariables file `WTF/Account/<ACCOUNT>/SavedVariables/Lucid.lua`, in the variable `LucidDB`. WoW writes
-that file on logout and on reload. Lucid sets some game settings (CVars) for nameplates and camera, and with the option "Take over the map key" it
-changes the map key bindings. When you switch the part off, the previous values and keys come back.
+that file on logout and on reload. Lucid sets some game settings (CVars) for nameplates and camera. When you switch the part off, the previous values come
+back. The option "Take over the map key" uses a temporary override and does not change your saved key bindings. Only if an
+earlier version of Lucid put its map action on a key does Lucid restore that key, once.
 
 ## Feedback
 

@@ -5,7 +5,7 @@
 --   placement (auto | lucid | external: wer Position/Skala besitzt; auto = Lucid, mit Open Map ueber dessen Einstellungen (mirrorOpenMap);
 --     external = Option "Open Map ueberlassen"; auto faellt auf external zurueck, wenn Open Maps Einstellungen nicht erreichbar sind),
 --   pos (nil | { point, relPoint, x, y }: gemerkte Lage nach dem Ziehen am Rahmen),
---   takeKey (W3: Taste der Blizzard-Karte, meist M, oeffnet die Lucid-Karte; die grosse Ansicht liegt auf Umschalt+Taste),
+--   takeKey (W3: Taste der Blizzard-Karte, meist M, oeffnet per Override die Lucid-Karte; die grosse Ansicht liegt auf Umschalt+Taste, wenn frei),
 --   runFade (W3: beim Laufen auf runAlpha abblenden, im Stehen/mit Maus darueber volle Deckkraft; ersetzt Blizzards mapFade).
 -- Groesse: "scale" ist die einzige Groessen-Einstellung; der Regler im Reiter und das Ziehen an den vier Eck-Griffen schreiben beide
 --   dorthin (Ziehen skaliert um die gegenueberliegende Ecke, Seitenverhaeltnis bleibt; nicht im Kampf, nicht bei Open Map).
@@ -1171,118 +1171,152 @@ end
 
 -- Tasten (W3) -------------------------------------------------------------------------------------------
 -- Eigene Belegungen "Lucid-Karte" (Bindings.xml: LUCID_MAP) und "Grosse Karte" (LUCID_MAP_BIG: Blizzards Layout fuer diese
--- Oeffnung). Mit takeKey liegen sie auf der Taste der Blizzard-Karte (TOGGLEWORLDMAP, meist M) bzw. Umschalt+Taste. Was Lucid
--- ueberschreibt, steht in LucidDB.mapBindings[Belegungs-Set][Taste] = vorherige Aktion (Account- und Charakter-Set getrennt); beim Ausschalten kommt alles exakt zurueck.
+-- Oeffnung). Mit takeKey legt Lucid sie als Override (SetOverrideBinding, wird nie gespeichert) auf die Taste der Blizzard-Karte
+-- (TOGGLEWORLDMAP, meist M). Die dauerhafte Belegung des Spielers bleibt unberuehrt; einzige Ausnahme ist das einmalige
+-- Zurueckdrehen der Altlast aus Lucid bis 1.0.2 (siehe rollbackLegacyKeys).
+-- Umschalt+Taste bekommt die grosse Ansicht nur, wenn die Kombination frei oder schon Lucids ist. Fremde Aktionen bleiben, auch
+-- Blizzards Standard TOGGLEBATTLEFIELDMINIMAP auf Umschalt+M: dann liegt die grosse Ansicht nur auf einer selbst gewaehlten Taste.
 local ACTION, ACTION_BIG = "LUCID_MAP", "LUCID_MAP_BIG"
 _G.BINDING_HEADER_LUCID = "Lucid"
 _G.BINDING_NAME_LUCID_MAP = L.MAP_BINDING
 _G.BINDING_NAME_LUCID_MAP_BIG = L.MAP_BINDING_BIG
 local pendingKeys = false
--- Erst nach dem ersten UPDATE_BINDINGS ist die Belegung des Spielers sicher geladen: vorher wird nichts gelesen, gesetzt oder gespeichert
--- (kommt das Ereignis nie, bleibt die Tastenuebernahme aus; die Karte selbst laeuft weiter).
-local bindingsReady = false
+local keyOwner -- eigener Frame, Besitzer der Overrides
+local wantedKeys = {} -- zuletzt angeforderte Zuordnung Taste -> Aktion (Vergleichsbasis fuer den Abgleich)
+local activeKeys = {} -- davon wirklich gesetzt (Status)
+local keyBuilds = 0 -- Neuaufbauten seit dem Laden (Diagnose: darf bei wiederholtem UPDATE_BINDINGS nicht steigen)
 
 local function bindingsAvailable()
-    return type(_G.GetBindingKey) == "function" and type(_G.SetBinding) == "function" and type(_G.GetBindingAction) == "function"
+    return type(_G.GetBindingKey) == "function" and type(_G.GetBindingAction) == "function"
+        and type(_G.SetOverrideBinding) == "function" and type(_G.ClearOverrideBindings) == "function"
 end
 
-local function saveBindings()
-    if type(_G.SaveBindings) == "function" and type(_G.GetCurrentBindingSet) == "function" then
-        pcall(_G.SaveBindings, _G.GetCurrentBindingSet())
-    end
+-- Grundbelegung der Taste, ohne Overrides
+local function baseAction(key)
+    local ok, a = pcall(_G.GetBindingAction, key)
+    return ok and type(a) == "string" and a or ""
 end
 
-local function bound(key)
+-- Was die Taste gerade wirklich ausloest, mit Overrides (auch denen anderer Addons)
+local function effectiveAction(key)
     local ok, a = pcall(_G.GetBindingAction, key, true)
     return ok and type(a) == "string" and a or ""
 end
 
--- Belegungen gelten je Tastenbelegungs-Set (1 = Account, 2 = Charakter): mapBindings[set][taste] = vorherige Aktion
-local function currentSet()
-    if type(_G.GetCurrentBindingSet) == "function" then
-        local ok, v = pcall(_G.GetCurrentBindingSet)
-        if ok and type(v) == "number" then return v end
-    end
-    return 1
-end
-
-local function records()
-    local rec = Store.db.mapBindings
-    if type(rec) ~= "table" then rec = {} end
-    -- alte flache Form (Taste -> Aktion) dem aktuellen Set zuordnen
-    for k, v in pairs(rec) do
-        if type(k) == "string" then
-            rec[currentSet()] = rec[currentSet()] or {}
-            rec[currentSet()][k] = v
-            rec[k] = nil
-        end
-    end
-    return rec
-end
-
-local function releaseKeys()
-    local all = Store.db and Store.db.mapBindings
-    if type(all) ~= "table" then return end
-    all = records()
-    local set = currentSet()
-    local rec = all[set]
-    if type(rec) ~= "table" then Store.db.mapBindings = next(all) and all or nil return end
-    local changed = false
-    for key, prev in pairs(rec) do
-        local cur = bound(key)
-        if cur == ACTION or cur == ACTION_BIG then -- nur zurueck, was noch Lucids ist (zwischenzeitlich umbelegte Tasten bleiben)
-            local ok, res
-            if type(prev) == "string" and prev ~= "" then ok, res = pcall(_G.SetBinding, key, prev) else ok, res = pcall(_G.SetBinding, key) end
-            if ok and res then changed = true end
-        end
-    end
-    all[set] = nil
-    Store.db.mapBindings = next(all) and all or nil
-    if changed then saveBindings() end
-end
-
-local function takeKeys()
-    local all = records()
-    local set = currentSet()
-    local rec = all[set] or {}
-    local changed = false
-    local function take(key, action)
-        local cur = bound(key)
-        if cur ~= action then
-            local ok, res = pcall(_G.SetBinding, key, action)
-            if ok and res then
-                changed = true
-                if rec[key] == nil then rec[key] = cur end -- nur eintragen, was wirklich uebernommen wurde
-            end
-        end
-    end
+-- Sollzustand aus der Grundbelegung. Eigene Overrides duerfen das Ergebnis nicht aendern, sonst pendelt der Abgleich: eine schon
+-- uebernommene Taste bleibt, solange ihre Grundbelegung die Blizzard-Karte ist, auch wenn GetBindingKey sie nicht mehr nennt.
+local function wantedKeyMap()
+    local wanted = {}
     local keys = { _G.GetBindingKey("TOGGLEWORLDMAP") }
-    for key in pairs(rec) do if bound(key) == ACTION then keys[#keys + 1] = key end end
-    local seen = {}
+    for key, action in pairs(activeKeys) do
+        if action == ACTION and baseAction(key) == "TOGGLEWORLDMAP" then keys[#keys + 1] = key end
+    end
     for _, key in ipairs(keys) do
-        if type(key) == "string" and key ~= "" and not seen[key] then
-            seen[key] = true
-            take(key, ACTION)
-            if not key:find("-", 1, true) then take("SHIFT-" .. key, ACTION_BIG) end
+        if type(key) == "string" and key ~= "" then wanted[key] = ACTION end
+    end
+    for _, key in ipairs(keys) do
+        if type(key) == "string" and key ~= "" and not key:find("-", 1, true) then
+            local shift = "SHIFT-" .. key
+            local cur = effectiveAction(shift)
+            if not wanted[shift] and (cur == "" or cur == ACTION_BIG) then wanted[shift] = ACTION_BIG end
         end
     end
-    if next(rec) ~= nil then
-        all[set] = rec
-        Store.db.mapBindings = all
-    end
-    if changed then saveBindings() end
+    return wanted
 end
 
---- Tastenuebernahme dem Profil angleichen (nur ausserhalb des Kampfs)
+local function sameKeys(a, b)
+    for k, v in pairs(a) do if b[k] ~= v then return false end end
+    for k, v in pairs(b) do if a[k] ~= v then return false end end
+    return true
+end
+
+-- Ohne Unterschied zum letzten Stand kein einziger API-Aufruf. Das verhindert die Schleife, egal ob Override-Aufrufe UPDATE_BINDINGS
+-- ausloesen (sofort oder spaeter; im Client nicht belegt). wantedKeys steht vor den Aufrufen, damit auch ein Ereignis mittendrin nichts mehr findet.
+local function applyKeys(wanted)
+    if sameKeys(wanted, wantedKeys) then return end
+    if not keyOwner then
+        local ok, fr = pcall(CreateFrame, "Frame")
+        if not ok or type(fr) ~= "table" then return end
+        keyOwner = fr
+    end
+    wantedKeys = wanted
+    keyBuilds = keyBuilds + 1
+    pcall(_G.ClearOverrideBindings, keyOwner)
+    activeKeys = {}
+    for key, action in pairs(wanted) do
+        if pcall(_G.SetOverrideBinding, keyOwner, false, key, action) then activeKeys[key] = action end
+    end
+end
+
+--- Tastenuebernahme dem Profil und der Grundbelegung angleichen (nur ausserhalb des Kampfs, sonst vorgemerkt)
 function Map.SyncKeys()
     if not bindingsAvailable() or not Store.db then return end
-    if not bindingsReady or inCombat() then pendingKeys = true return end
+    if inCombat() then pendingKeys = true return end
     pendingKeys = false
     local ok, err = pcall(function()
         local cfg = Map.GetConfig()
-        if modEnabled and cfg.enabled and cfg.takeKey then takeKeys() else releaseKeys() end
+        applyKeys((modEnabled and cfg.enabled and cfg.takeKey) and wantedKeyMap() or {})
     end)
     if not ok then geterrorhandler()(err) end
+end
+
+-- Altlast bis 1.0.2 ------------------------------------------------------------------------------------
+-- Damals lag LUCID_MAP dauerhaft auf der Taste; LucidDB.mapBindings[Belegungs-Set][Taste] = vorherige Aktion. Der einzige erlaubte
+-- SetBinding/SaveBindings-Pfad: je Sitzung hoechstens ein Lauf, nicht im Kampf, LEGACY_DELAY Sekunden nach dem Betreten der Welt.
+-- Geschrieben wird nur, wenn eine Taste noch wirklich Lucids Aktion traegt; sonst wird der Eintrag ohne Schreibzugriff geloescht.
+-- Scheitert SetBinding oder wirft SaveBindings, bleibt der Eintrag fuer den Lauf der naechsten Sitzung liegen.
+-- Eintraege eines gerade nicht aktiven Sets bleiben fuer dessen Lauf liegen (SetBinding wirkt nur auf das aktive Set).
+local LEGACY_DELAY = 8
+local worldEntered, legacyDone, legacyTimer = false, false, false
+
+local function legacyRecords()
+    local all = Store.db and Store.db.mapBindings
+    return type(all) == "table" and all or nil
+end
+
+local function rollbackLegacyKeys()
+    local all = legacyRecords()
+    if legacyDone or not all then return end
+    if type(_G.SetBinding) ~= "function" or type(_G.SaveBindings) ~= "function" or type(_G.GetCurrentBindingSet) ~= "function"
+        or type(_G.GetBindingAction) ~= "function" then return end
+    legacyDone = true
+    local okSet, set = pcall(_G.GetCurrentBindingSet)
+    if not okSet or (set ~= 1 and set ~= 2) then return end -- aktives Set unklar: in dieser Sitzung nichts anfassen
+    local rec = type(all[set]) == "table" and all[set] or {}
+    for k, v in pairs(all) do
+        if type(k) == "string" then -- alte flache Form (Taste -> Aktion) gehoert zum aktiven Set
+            if rec[k] == nil then rec[k] = v end
+            all[k] = nil
+        end
+    end
+    all[set] = rec
+    local changed, failed = false, false
+    for key, prev in pairs(rec) do
+        local cur = baseAction(key)
+        if cur == ACTION or cur == ACTION_BIG then
+            local ok, res
+            if type(prev) == "string" and prev ~= "" then ok, res = pcall(_G.SetBinding, key, prev) else ok, res = pcall(_G.SetBinding, key) end
+            if ok and res then changed = true else failed = true end
+        end
+    end
+    if changed and not pcall(_G.SaveBindings, set) then failed = true end
+    if not failed then
+        all[set] = nil
+        Store.db.mapBindings = next(all) and all or nil
+    end
+    Map.SyncKeys()
+end
+
+local function scheduleLegacy()
+    if legacyDone or legacyTimer or not worldEntered or not legacyRecords() then return end
+    if not (C_Timer and C_Timer.After) then return end
+    legacyTimer = true
+    C_Timer.After(LEGACY_DELAY, function()
+        legacyTimer = false
+        if inCombat() then return end -- Kampfende plant neu, wieder mit vollem Abstand
+        local ok, err = pcall(rollbackLegacyKeys)
+        if not ok then geterrorhandler()(err) end
+    end)
 end
 
 --- Karte per Taste: big = grosse Ansicht (Blizzards Layout). Eine offene Karte schliesst die Taste wieder.
@@ -1428,7 +1462,7 @@ function Map.IsPending() return pending end
 --- Zustand fuer Tests/Diagnose
 function Map.State()
     return { engaged = last.engaged, external = last.external, touched = touched, pending = pending, hidden = last.hidden,
-        border = last.border, questOpen = Map.questOpen == true, bypass = bypass, pendingKeys = pendingKeys, bindingsReady = bindingsReady, lastToggle = Map.lastToggle }
+        border = last.border, questOpen = Map.questOpen == true, bypass = bypass, pendingKeys = pendingKeys, overrideKeys = activeKeys, keyBuilds = keyBuilds, legacyKeys = legacyRecords() ~= nil, lastToggle = Map.lastToggle }
 end
 function Map.Parts() return host, border, buttons, qbtn, grips end
 
@@ -1449,14 +1483,15 @@ ns.RegisterModule("map", {
 Compat.TryOn("PLAYER_REGEN_ENABLED", function()
     if pending then Map.Apply() end
     if pendingKeys then Map.SyncKeys() end
+    scheduleLegacy()
 end)
--- Belegung geladen: Nachholen, falls vorher etwas anstand. Eigene SetBinding-Aufrufe loesen das Ereignis erneut aus; das ist
--- harmlos, weil nur bei vorgemerktem Abgleich gearbeitet wird und ein Abgleich ohne Aenderung nichts setzt und nichts speichert.
-Compat.TryOn("UPDATE_BINDINGS", function()
-    bindingsReady = true
-    if pendingKeys then Map.SyncKeys() end
+-- Grundbelegung geaendert oder erst jetzt geladen: Overrides angleichen. Ohne Unterschied passiert nichts (siehe applyKeys).
+Compat.TryOn("UPDATE_BINDINGS", function() Map.SyncKeys() end)
+Compat.TryOn("PLAYER_ENTERING_WORLD", function()
+    worldEntered = true
+    scheduleLegacy()
+    if modEnabled then ensureHooks() Map.Apply() Map.SyncKeys() end
 end)
-Compat.TryOn("PLAYER_ENTERING_WORLD", function() if modEnabled then ensureHooks() Map.Apply() Map.SyncKeys() end end)
 Compat.TryOn("UI_SCALE_CHANGED", function() if touched then Map.Relayout() end end)
 Compat.TryOn("DISPLAY_SIZE_CHANGED", function() if touched then Map.Relayout() end end)
 Compat.TryOn("ADDON_LOADED", function(_, name)
@@ -1480,7 +1515,11 @@ ns.commands.map = function(rest)
         local cfg = Map.GetConfig()
         ns.Print(L.MAP_STATUS, cfg.enabled and L.NP_YES or L.NP_NO, cfg.questLog, cfg.border, cfg.scale, cfg.alpha,
             Map.ExternalPlacement(cfg) and L.NP_YES or L.NP_NO)
-        ns.Print(L.MAP_STATUS_KEYS, bindingsReady and L.NP_YES or L.NP_NO, pendingKeys and L.NP_YES or L.NP_NO)
+        local keys = {}
+        for key in pairs(activeKeys) do keys[#keys + 1] = key end
+        table.sort(keys)
+        ns.Print(L.MAP_STATUS_KEYS, #keys > 0 and table.concat(keys, ", ") or L.NP_NO, pendingKeys and L.NP_YES or L.NP_NO,
+            legacyRecords() and L.NP_YES or L.NP_NO, keyBuilds)
     elseif sub == "on" or sub == "an" then enable(true)
     elseif sub == "off" or sub == "aus" then enable(false)
     elseif Map.sub[sub] then Map.sub[sub]()
