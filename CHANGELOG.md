@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0
+
+### Zone ornaments that match the zone
+- The large zone card now shows an ornament that fits the zone you enter: 41 new hand-picked motifs for every classic zone
+  and city and the WoW Forever zones (Zephras Isle, Darkspear Islands, Riverglades, Shen'dralas, Mount Hyjal). Examples:
+  the Bronzebeard hammer in Ironforge and Dun Morogh, the Forsaken crest in Tirisfal and the Undercity, the Horde crest in
+  Durotar and Orgrimmar, the World Tree with Archimonde's remains on Mount Hyjal.
+- New option "Ornament adapts to the zone" in the Zone text tab (on by default). The ornament you pick ("Ornament (fixed)")
+  is used in zones without a motif of their own, and everywhere when the option is off. "None" always turns the ornament
+  off. All zone motifs can also be picked as a fixed ornament.
+- `/lucid zone auto [on|off]`; `/lucid zone test <motif>` shows one motif, `/lucid zone test all` plays all of them,
+  `/lucid zone test stop` ends it. `/lucid zone debug` shows the map and the chosen motif.
+- Ornaments keep their distance from a long subzone name or the "Discovered" line instead of overlapping it.
+- The download is larger than before because of the new artwork.
+
+### Camera
+- The target focus on enemies now fades in and out (new setting "Target focus transition time", default 1.5 s) instead of
+  snapping to the target; the cinematic presets zoom over 1.5 s.
+- Smoother zoom when several camera rules change quickly one after another.
+
 ## 1.0.3
 
 The map key no longer changes your saved key bindings; it uses a temporary override. If an earlier version put Lucid's map action on a key, Lucid restores that key once, a few seconds after you enter the world. Shift plus the map key opens Blizzard's large map only if that combination is free. A key that has another action, such as the default Shift+M for the battlefield map, keeps it; you can bind the large map to a key of your own under Key Bindings > AddOns.

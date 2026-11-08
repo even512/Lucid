@@ -1,5 +1,5 @@
 -- Reiter "Zonentext" (Spec B5, Oberflaechen-Delta): Modul an/aus, Mindestabstand, Glanz- und Lichtband-Staerke
--- (0-100 %, Nachtrag 03.11.), Verzierung (Stil + Groesse), je Ausloeser (Zone | Subzone |
+-- (0-100 %, Nachtrag 03.11.), Verzierung (Haken "passt sich der Zone an", fester Stil + Groesse), je Ausloeser (Zone | Subzone |
 -- Entdeckung) Anzeigen, Schrift, Groesse, Einblenden, Dauer, Ausblenden; Knoepfe Testen, Position verschieben und
 -- zuruecksetzen. Alle Werte gehen ueber Zone.Validate ins aktive Profil und wirken sofort (Karten lesen die
 -- Einstellungen beim Start). Der Reiter enthaelt keinen Fremdtext; Beschriftungen kommen aus den Locales.
@@ -99,19 +99,30 @@ Config.RegisterPage("zone", {
         page.ornScale = W.Slider(page, L.UI_ZONE_ORN_SCALE, rs[1], rs[2], 5, 180, pct, function(v)
             update(page, function(z) z.ornScale = v end)
         end)
-        page.ornScale:SetPoint("TOPLEFT", 560, -100)
+        -- Haken: die Karte waehlt das Motiv der Zone (Zonen-Motive, Spec lucid-change-zonen-ornamente); der Ausklapper
+        -- gilt dann fuer Zonen ohne Motiv. Die Beschriftung bricht um (rechte Spalte ist schmal).
+        page.autoOrn = W.Check(page, L.UI_ZONE_AUTO_ORN, function(on)
+            update(page, function(z) z.autoOrnament = on end)
+        end)
+        page.autoOrn:SetPoint("TOPLEFT", 556, -80)
+        if page.autoOrn.label then
+            page.autoOrn.label:SetWidth(176)
+            if page.autoOrn.label.SetWordWrap then page.autoOrn.label:SetWordWrap(true) end
+        end
+        W.Tooltip(page.autoOrn, function() return L.UI_ZONE_AUTO_ORN, L.UI_ZONE_AUTO_ORN_TIP end)
+        page.ornScale:SetPoint("TOPLEFT", 560, -128)
         W.Tooltip(page.ornScale, function() return L.UI_ZONE_ORN_SCALE, L.UI_ZONE_ORN_SCALE_TIP end)
         local rd = Zone.LIMITS.ornDelay
         page.ornDelay = W.Slider(page, L.UI_ZONE_ORN_DELAY, rd[1], rd[2], 0.1, 180, sec, function(v)
             update(page, function(z) z.ornDelay = v end)
         end)
-        page.ornDelay:SetPoint("TOPLEFT", 560, -148)
+        page.ornDelay:SetPoint("TOPLEFT", 560, -176)
         W.Tooltip(page.ornDelay, function() return L.UI_ZONE_ORN_DELAY, L.UI_ZONE_ORN_DELAY_TIP end)
         local rf = Zone.LIMITS.ornFade
         page.ornFade = W.Slider(page, L.UI_ZONE_ORN_FADE, rf[1], rf[2], 0.1, 180, sec, function(v)
             update(page, function(z) z.ornFade = v end)
         end)
-        page.ornFade:SetPoint("TOPLEFT", 560, -196)
+        page.ornFade:SetPoint("TOPLEFT", 560, -224)
         W.Tooltip(page.ornFade, function() return L.UI_ZONE_ORN_FADE, L.UI_ZONE_ORN_FADE_TIP end)
 
         local head = W.Header(page, L.UI_ZONE_TRIGGERS, 520)
@@ -185,12 +196,16 @@ Config.RegisterPage("zone", {
         page.glow:SetValue(cfg.glow)
         page.band:SetValue(cfg.band)
         page.ornament:SetValue(cfg.ornament)
+        page.autoOrn:SetValue(cfg.autoOrnament)
+        page.autoOrn:SetActive(cfg.ornament ~= "none") -- "Keine" schaltet die Verzierung immer ab
         page.ornScale:SetValue(cfg.ornScale)
         page.ornScale:SetActive(cfg.ornament ~= "none")
         page.ornDelay:SetValue(cfg.ornDelay)
-        page.ornDelay:SetActive(cfg.ornament ~= "simple" and cfg.ornament ~= "none")
+        -- Einsatz/Einblenden wirken bei allen Textur-Stilen; mit Automatik kann auch bei "Schlicht" ein Motiv kommen
+        local textured = cfg.ornament ~= "none" and (cfg.ornament ~= "simple" or cfg.autoOrnament)
+        page.ornDelay:SetActive(textured)
         page.ornFade:SetValue(cfg.ornFade)
-        page.ornFade:SetActive(cfg.ornament ~= "simple" and cfg.ornament ~= "none")
+        page.ornFade:SetActive(textured)
         for key, b in pairs(page.tabs) do
             b:SetSelected(key == sel)
             W.Color(b.label, key == sel and C.accent or C.muted)

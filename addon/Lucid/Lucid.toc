@@ -15,6 +15,7 @@
 Locales\enUS.lua
 Locales\deDE.lua
 modules\Zone\Ornaments.lua
+modules\Zone\ZoneMotifs.lua
 Core.lua
 Compat.lua
 Store.lua
@@ -42,6 +43,7 @@ modules\Camera\CVars.lua
 modules\Camera\Camera.lua
 modules\Camera\Zoom.lua
 modules\Camera\Offset.lua
+modules\Camera\Focus.lua
 modules\Camera\Probe.lua
 modules\Map\Window.lua
 modules\Map\Probe.lua

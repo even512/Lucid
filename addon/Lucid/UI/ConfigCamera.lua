@@ -148,6 +148,7 @@ local function showSection(page)
         if section == "zoom" then f:Show() else f:Hide() end
     end
     if section == "action" then page.offsetSecondsSlider:Show() else page.offsetSecondsSlider:Hide() end
+    if section == "target" then page.focusSecondsSlider:Show() else page.focusSecondsSlider:Hide() end
 end
 
 Config.RegisterPage("camera", {
@@ -299,6 +300,12 @@ Config.RegisterPage("camera", {
             function(v) report(page, Camera.Set("offsetSeconds", v)) end)
         page.offsetSecondsSlider:SetPoint("TOPLEFT", 300, -282)
         W.Tooltip(page.offsetSecondsSlider.slider, function() return L.UI_CAM_OFFSET_SECONDS, L.UI_CAM_OFFSET_SECONDS_TIP end)
+        -- Uebergangsdauer des Zielfokus auf Gegner (gilt fuer alle Eintraege), in der Gruppe "Zielfokus"
+        page.focusSecondsSlider = W.Slider(page, L.UI_CAM_FOCUS_SECONDS, Camera.FOCUS_SECONDS_MIN, Camera.FOCUS_SECONDS_MAX, 0.1, 400,
+            function(v) return v <= 0 and L.UI_CAM_OFFSET_INSTANT or ("%g s"):format(v) end,
+            function(v) report(page, Camera.Set("focusSeconds", v)) end)
+        page.focusSecondsSlider:SetPoint("TOPLEFT", 300, -282)
+        W.Tooltip(page.focusSecondsSlider.slider, function() return L.UI_CAM_FOCUS_SECONDS, L.UI_CAM_FOCUS_SECONDS_TIP end)
         showSection(page)
 
         -- Schalter und Hinweise (unten)
@@ -383,6 +390,8 @@ Config.RegisterPage("camera", {
         page.secondsSlider:SetActive(usable)
         page.offsetSecondsSlider:SetValue(cfg.offsetSeconds)
         page.offsetSecondsSlider:SetActive(usable)
+        page.focusSecondsSlider:SetValue(cfg.focusSeconds)
+        page.focusSecondsSlider:SetActive(usable)
         page.comfort:SetValue(cfg.autoComfort)
         page.comfort:SetActive(usable)
         page.popup:SetValue(cfg.suppressPopup)

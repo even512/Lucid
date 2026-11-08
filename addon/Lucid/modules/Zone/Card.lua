@@ -34,6 +34,8 @@ Card.ORN_MIN, Card.ORN_MAX = 60, 220 -- ... begrenzt auf diese Laenge
 Card.ORN_FROM = 0.01         -- Startbreite der wachsenden Linie (Anteil; nicht 0, Skalierung 0 meiden)
 Card.DIAMOND = 5             -- px, Raute am inneren Linienende (aus drei Rechtecken, keine Drehung noetig)
 Card.LINE2_GAP, Card.SUB_GAP = 6, 8
+Card.SCREEN_FILL = 0.96      -- Anteil der Bildschirmbreite, den eine Karte mit Seiten-Ornamenten (pair) hoechstens fuellt
+Card.SIDE_MIN_SHRINK = 0.2   -- so weit duerfen die Seiten (pair) beim Verkleinern hoechstens schrumpfen
 Card.LINE2_ALPHA = 0.85
 Card.ZOOM = 1.08             -- Startskalierung der Dekoration der grossen Karte (-> 1,0 synchron zum Einblenden)
 local MEDIA = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\"
@@ -55,10 +57,13 @@ Card.ORN_TINT = { 1, 0.86, 0.55 }
 --   weitere = Vorlagen-Stile aus Ornaments.lua (erzeugt: node scripts/gen-zone-media.mjs --templates aus
 --              docs/ornament-src/recipes.json; neuer Stil = Vorlage + Rezept-Eintrag, dann das Kommando)
 --   none     = keine Verzierung (Band und Glanz bleiben)
+--   Zonen-Motive = Vorlagen-Stile mit "auto": true im Rezept; bei zone.autoOrnament waehlt die Karte das Motiv ihrer
+--              Zone (ZoneMotifs.lua, uiMapID aus card.mapID), sonst gilt zone.ornament (Card.ResolveOrnament)
 -- Einsatz: zone.ornDelay s nach Kartenstart (0 = zusammen mit dem Titel), Einblenden zone.ornFade s (Alpha easeOut,
 -- Wachsen grow -> 1 ueber 1,3 x ornFade); gilt fuer alle Textur-Stile, die schlichten Linien wachsen mit der Karte.
 -- Stil-Tabelle: kind "sides" (links/rechts vom Titel; Breite factor x Linienlaenge in [min, max], midY = Hoehe der
--- Strichmitte am inneren Ende), "frame" (Rahmen um die Titelzeilen; innerW/innerH = gemessene Innenflaeche als
+-- Strichmitte am inneren Ende), "pair" (wie "sides", aber zwei eigenstaendige Seiten left/right mit je eigenem
+-- aspect/midY/srcW/levels; gleicher Massstab, die breitere Seite bekommt factor x Linienlaenge), "frame" (Rahmen um die Titelzeilen; innerW/innerH = gemessene Innenflaeche als
 -- Anteil, marginX/marginY Rand um den Text, mindestens min breit) oder "bar" (Leiste unter dem Titelblock, Breite
 -- Textbreite + extra in [min, max];
 -- top = Groesse einer zweiten Leiste ueber dem Titel, flipBottom/flipTop spiegeln senkrecht; fill = Anteil der
@@ -81,6 +86,37 @@ for name, S in pairs((ns.ZoneOrnaments or {}).styles or {}) do
     Card.STYLES[name] = copy
 end
 Card.SWIRL, Card.FILIGREE = Card.STYLES.swirl, Card.STYLES.filigree
+
+-- Zonen-Motive (Spec lucid-change-zonen-ornamente): Vorlagen-Stile mit "auto": true im Rezept (O.motif[name]).
+-- Sie sind zusaetzlich als fester Stil waehlbar; bei zone.autoOrnament waehlt die Karte das Motiv der Zone
+-- (ZoneMotifs.byMap[uiMapID]).
+function Card.IsMotif(name)
+    local m = (ns.ZoneOrnaments or {}).motif
+    return type(m) == "table" and m[name] == true
+end
+
+--- Motiv der Zonenkarte mapID (Name) oder nil: Tabelle ZoneMotifs.byMap, unabhaengig davon, ob es geladen ist
+function Card.MotifFor(mapID)
+    local byMap = (ns.ZoneMotifs or {}).byMap
+    if type(byMap) ~= "table" or type(mapID) ~= "number" or mapID ~= mapID then return nil end
+    return byMap[mapID]
+end
+
+--- Welcher Verzierungs-Stil gilt fuer die Karte (rein, ohne Frames)? Liefert Stil, Herkunft:
+---   "none" im Profil          => "none", "fixed" (ausdruecklich abgeschaltet, gilt auch mit Automatik)
+---   Automatik an + Motiv da   => Motiv, "auto"
+---   Automatik an, Motiv fehlt => cfg.ornament, "fallback" (Zone ohne Eintrag/Instanz, Motiv nicht geladen)
+---   Automatik aus             => cfg.ornament, "fixed"
+--- loaded(name) -> bool legt fest, ob ein Motiv zeigbar ist (Standard: Stil bekannt; die Karte prueft zusaetzlich,
+--- ob die Textur ladbar ist).
+function Card.ResolveOrnament(cfg, mapID, loaded)
+    local fixed = type(cfg) == "table" and cfg.ornament or "swirl"
+    if fixed == "none" then return "none", "fixed" end
+    if type(cfg) ~= "table" or cfg.autoOrnament == false then return fixed, "fixed" end
+    local motif = Card.MotifFor(mapID)
+    if motif and (loaded and loaded(motif) or (not loaded and Card.STYLES[motif] ~= nil)) then return motif, "auto" end
+    return fixed, "fallback"
+end
 -- Lichtband hinter der grossen Karte: zwei Lagen (aussen/innen), Textur laeuft nach allen Seiten weich auf 0 aus.
 -- Ueberstand: waagerecht ueber das Ornament hinaus, senkrecht ueber Ober-/Unterkante der Zeilen.
 Card.BAND_INNER = { alpha = 0.25, padY = 12 }
@@ -290,7 +326,10 @@ local function newPiece(parent, S)
     noSnap(holder)
     holder:Hide()
     holder.isPiece, holder.pool = true, {}
-    for i = 1, Card.PIECE_POOL do
+    -- Vorrat: mindestens PIECE_POOL, bei Streifen-Stufen (pair) so viele wie die Stufe mit den meisten Kacheln braucht
+    local size = Card.PIECE_POOL
+    for _, lv in ipairs(S.levels) do size = math.max(size, #lv.tiles) end
+    for i = 1, size do
         local t = newSoft(holder, 0, MEDIA .. first.file, Card.ORN_TINT[1], Card.ORN_TINT[2], Card.ORN_TINT[3], 1)
         if not t then return nil end
         pcall(t.SetDrawLayer, t, "ARTWORK", 0)
@@ -336,17 +375,26 @@ local function layoutPiece(piece, S, segs, h, mirror, flip, eff)
         phys = perContent, filter = filter, srcLimited = level == S.levels[#S.levels] and (S.srcW or 0) > 0
             and level.cw >= 0.75 * S.srcW }
     -- Abschnitte an den Kachelgrenzen teilen
-    local subs = {}
+    -- Kacheln mit y0/y1 (Streifen-Stufen, Layout pair) liegen uebereinander und werden ueber Offsets gesetzt, alle anderen
+    -- hintereinander (Kette); totalW = Summe der Abschnittsbreiten
+    local subs, segX, striped = {}, 0, false
     for _, sg in ipairs(segs) do
         for _, tile in ipairs(level.tiles) do
             local a, b = math.max(sg[1], tile.from), math.min(sg[2], tile.to)
-            if b > a then subs[#subs + 1] = { tile = tile, a = a, b = b, w = sg[3] * (b - a) / (sg[2] - sg[1]) } end
+            if b > a then
+                subs[#subs + 1] = { tile = tile, a = a, b = b, w = sg[3] * (b - a) / (sg[2] - sg[1]),
+                    x = segX + (a - sg[1]) / (sg[2] - sg[1]) * sg[3] }
+                if tile.y0 then striped = true end
+            end
         end
+        segX = segX + sg[3]
     end
+    local totalW = segX
     local total, prev = 0, nil
-    for i = 1, Card.PIECE_POOL do
+    for i = 1, math.max(Card.PIECE_POOL, #piece.pool) do
         local sub = subs[mirror and (#subs + 1 - i) or i]
         local t = piece.pool[i]
+        if not t then break end
         if sub then
             local tile, file = sub.tile, MEDIA .. sub.tile.file
             if t.curFile ~= file or t.curFilter ~= filter then
@@ -361,17 +409,23 @@ local function layoutPiece(piece, S, segs, h, mirror, flip, eff)
             local v0, v1 = tile.v0, tile.v1
             if flip then v0, v1 = v1, v0 end
             if type(t.SetTexCoord) == "function" then pcall(t.SetTexCoord, t, l, r, v0, v1) end
-            t:SetSize(sub.w, h)
             t:ClearAllPoints()
-            if prev then t:SetPoint("TOPLEFT", prev, "TOPRIGHT", 0, 0) else t:SetPoint("TOPLEFT", piece, "TOPLEFT", 0, 0) end
+            if tile.y0 then
+                local xo = mirror and (totalW - sub.x - sub.w) or sub.x
+                t:SetSize(sub.w, (tile.y1 - tile.y0) * h)
+                t:SetPoint("TOPLEFT", piece, "TOPLEFT", xo, -tile.y0 * h)
+            else
+                t:SetSize(sub.w, h)
+                if prev then t:SetPoint("TOPLEFT", prev, "TOPRIGHT", 0, 0) else t:SetPoint("TOPLEFT", piece, "TOPLEFT", 0, 0) end
+                prev = t
+                total = total + sub.w
+            end
             t:Show()
-            prev = t
-            total = total + sub.w
         else
             t:Hide()
         end
     end
-    piece:SetSize(total, h)
+    piece:SetSize(striped and totalW or total, h)
 end
 
 -- Groesse setzen: Stueck per layoutPiece, eingebaute Textur per SetSize (Spiegelung ist dort schon gesetzt)
@@ -505,31 +559,32 @@ local function buildAnims(f)
             local g = group(f.glow, true)
             A.glow[1] = { group = g, rise = newAlpha(g, 1, 0, 1, "OUT"), decay = newAlpha(g, 2, 1, 0, "IN_OUT"), tex = f.glow }
         end
-        -- Verzierungen: leichtes Wachsen (Ursprung am Titel-Ende bzw. in der Mitte) + Alpha, beides ab dem Einsatz
+        -- Verzierungen: leichtes Wachsen (Ursprung am Titel-Ende bzw. in der Mitte) + Alpha, beides ab dem Einsatz.
+        -- A.addStyle haengt die Animationen eines Stils an; Zonen-Motive entstehen erst bei Bedarf (ensureStyle)
+        -- und rufen es spaeter auf.
         A.orn = {}
-        local defs = {}
-        for name, spec in pairs(Card.STYLES) do
-            local st = f.styleTex[name]
-            if st then
-                if spec.kind == "sides" then
-                    defs[#defs + 1] = { st.a, "LEFT", spec }
-                    defs[#defs + 1] = { st.b, "RIGHT", spec }
-                else
-                    defs[#defs + 1] = { st.a, "CENTER", spec }
-                    if st.b then defs[#defs + 1] = { st.b, "CENTER", spec } end
+        function A.addStyle(st, spec)
+            local defs
+            if spec.kind == "sides" or spec.kind == "pair" then
+                defs ={ { st.a, "LEFT" }, { st.b, "RIGHT" } }
+            else
+                defs = { { st.a, "CENTER" }, { st.b, "CENTER" } }
+            end
+            for _, def in ipairs(defs) do
+                local t, origin = def[1], def[2]
+                if t then
+                    local g = group(t, true)
+                    local sc = g:CreateAnimation("Scale")
+                    if type(sc.SetOrigin) == "function" then sc:SetOrigin(origin, 0, 0) end
+                    setSmoothing(sc, "OUT")
+                    setScaleRange(sc, spec.grow, spec.grow, 1, 1)
+                    A.orn[t] = { group = g, scale = sc, alpha = newAlpha(g, 1, 0, spec.alpha, "OUT") }
                 end
             end
         end
-        for _, def in ipairs(defs) do
-            local t, origin, spec = def[1], def[2], def[3]
-            if t then
-                local g = group(t, true)
-                local s = g:CreateAnimation("Scale")
-                if type(s.SetOrigin) == "function" then s:SetOrigin(origin, 0, 0) end
-                setSmoothing(s, "OUT")
-                setScaleRange(s, spec.grow, spec.grow, 1, 1)
-                A.orn[t] = { group = g, scale = s, alpha = newAlpha(g, 1, 0, spec.alpha, "OUT") }
-            end
+        for name, spec in pairs(Card.STYLES) do
+            local st = f.styleTex[name]
+            if st then A.addStyle(st, spec) end
         end
         return A
     end)
@@ -543,6 +598,49 @@ local function stopAnims(f)
 end
 
 local fallbackUpdate
+
+--- Texturen eines Stils anlegen: { a, b } oder nil, wenn eine Textur nicht ladbar ist.
+--- sides a = rechts, b = links (gespiegelt); bar a = unten, b = oben (optional)
+local function makeStyleTex(o, S)
+    local a, b
+    if S.kind == "pair" then
+        -- zwei eigenstaendige Seiten (S.right / S.left), je mit eigenen Stufen
+        a = S.right and newPiece(o, S.right) or nil
+        b = a and S.left and newPiece(o, S.left) or nil
+    elseif S.levels then
+        -- Vorlagen-Stil: Stuecke aus Kacheln (Stufe/Filter je Anzeigegroesse, siehe layoutPiece)
+        a = newPiece(o, S)
+        b = a and (S.kind == "sides" or S.top) and newPiece(o, S) or nil
+    elseif S.kind == "sides" then
+        a = newOrnTex(o, S.tex)
+        b = a and newOrnTex(o, S.tex, { 1, 0, 0, 1 })
+    else
+        a = newOrnTex(o, S.tex, S.flipBottom and { 0, 1, 1, 0 } or nil)
+        b = a and S.top and newOrnTex(o, S.tex, S.flipTop and { 0, 1, 1, 0 } or nil)
+    end
+    if a and ((S.kind ~= "sides" and S.kind ~= "pair") or b) then return { a = a, b = b } end
+    return nil
+end
+
+--- Stil des Rahmens bereitstellen (Motive werden hier erst angelegt). true, wenn er zeigbar ist.
+local function ensureStyle(f, name)
+    if f.styleTex[name] then return true end
+    local S = Card.STYLES[name]
+    if not S or f.styleTried[name] or not f.ornFrame then return false end
+    f.styleTried[name] = true
+    local ok, st = pcall(makeStyleTex, f.ornFrame, S)
+    if not (ok and st) then return false end
+    -- die Animation muss mit: ohne sie scheiterte startIn beim Einblenden => Stil gilt dann als nicht ladbar
+    if f.A and f.A.addStyle then
+        if not pcall(f.A.addStyle, st, S) or not f.A.orn[st.a] then
+            st.a:Hide()
+            if st.b then st.b:Hide() end
+            return false
+        end
+    end
+    f.styleTex[name] = st
+    return true
+end
 
 local function newFrame(name)
     local f = CreateFrame("Frame", name, UIParent)
@@ -585,23 +683,16 @@ local function newFrame(name)
         f.bands[#f.bands + 1] = newBand(d, spec, i - 1)
     end
     f.glow = newGlow(d, f.line1) -- nil: Textur nicht ladbar => kein Glanz
-    -- Verzierungen (nil: Textur nicht ladbar => Stil faellt auf "simple" zurueck)
-    -- je Stil: sides a = rechts, b = links (gespiegelt); bar a = unten, b = oben (optional)
-    f.styleTex = {}
+    -- Verzierungen (nil: Textur nicht ladbar => Stil faellt auf "simple" zurueck). Zonen-Motive (O.motif) entstehen
+    -- erst bei der ersten Karte, die sie braucht (ensureStyle): 40 weitere Stile mit je einem Vorrat Texturen waeren
+    -- sonst bei jedem Start geladen.
+    f.styleTex, f.styleTried = {}, {}
     for name, S in pairs(Card.STYLES) do
-        local a, b
-        if S.levels then
-            -- Vorlagen-Stil: Stuecke aus Kacheln (Stufe/Filter je Anzeigegroesse, siehe layoutPiece)
-            a = newPiece(o, S)
-            b = a and (S.kind == "sides" or S.top) and newPiece(o, S) or nil
-        elseif S.kind == "sides" then
-            a = newOrnTex(o, S.tex)
-            b = a and newOrnTex(o, S.tex, { 1, 0, 0, 1 })
-        else
-            a = newOrnTex(o, S.tex, S.flipBottom and { 0, 1, 1, 0 } or nil)
-            b = a and S.top and newOrnTex(o, S.tex, S.flipTop and { 0, 1, 1, 0 } or nil)
+        if not Card.IsMotif(name) then
+            f.styleTried[name] = true
+            local st = makeStyleTex(o, S)
+            if st then f.styleTex[name] = st end
         end
-        if a and (S.kind ~= "sides" or b) then f.styleTex[name] = { a = a, b = b } end
     end
     local sw, fl = f.styleTex.swirl or {}, f.styleTex.filigree or {}
     f.swR, f.swL, f.filB, f.filT = sw.a, sw.b, fl.a, fl.b -- Kurznamen (Diagnose/Tests)
@@ -641,6 +732,27 @@ end
 
 local function easeOut(t) return 1 - (1 - t) * (1 - t) end
 
+-- Seitliche Ornamente (sides/pair): halbe Breite der breitesten Zeile, die vertikal im Bereich einer Seite liegt
+-- (Textur der Hoehe h mit Mitte dy ueber/unter der Titelmitte; Zeile 1 zaehlt immer, Zeile 2/Untertitel aus f.rows).
+local function sideReach(f, w1, h, dy)
+    local need = w1 / 2
+    for _, row in ipairs(f.rows or {}) do
+        if row.top > dy - h / 2 and row.bottom < dy + h / 2 then need = math.max(need, row.w / 2) end
+    end
+    return need
+end
+
+-- Verkleinerungsfaktor (<= 1), damit eine Karte mit Seiten-Ornamenten (innere Kante bei half + gap, Seitenbreite
+-- widest) nicht breiter als der Bildschirm wird; ohne bekannte Bildschirmbreite 1
+local function screenShrink(half, gap, widest)
+    local ok, sw = pcall(UIParent.GetWidth, UIParent)
+    sw = ok and Compat.Num(sw) or nil
+    if not (sw and sw > 0 and widest > 0) then return 1 end
+    local avail = sw * Card.SCREEN_FILL / 2 - half - gap
+    if widest <= avail then return 1 end
+    return math.max(Card.SIDE_MIN_SHRINK, avail / widest)
+end
+
 -- Verzierung je Stil zeigen/verstecken und einmal je Karte bemessen (das Wachsen macht die Animation).
 -- Liefert die waagerechte Ausdehnung ueber die halbe Textbreite hinaus (fuer Band und Frame-Breite) und die
 -- zusaetzliche Hoehe unter dem Titelblock (Filigran).
@@ -666,14 +778,49 @@ local function setOrnament(f, style, k, w1, lastLine, linesH)
         local w = math.min(S.max, math.max(S.min, S.factor * f.ornLen)) * k
         local h = w / S.aspect
         local dy = (S.midY - 0.5) * h -- Strichmitte am inneren Ende auf die Mitte der Titelzeile
+        local half = sideReach(f, w1, h, dy) -- Abstand nach der breitesten Zeile neben der Seite (wie bei pair)
+        local extra = half - w1 / 2
+        local q = screenShrink(half, S.gap, w)
+        w, h, dy = w * q, h * q, dy * q
         sizeOrn(st.a, S, nil, w, h, false, false, eff)
         sizeOrn(st.b, S, nil, w, h, true, false, eff)
         st.a:ClearAllPoints()
         st.b:ClearAllPoints()
-        st.a:SetPoint("LEFT", f.line1, "RIGHT", S.gap, dy)
-        st.b:SetPoint("RIGHT", f.line1, "LEFT", -S.gap, dy)
+        st.a:SetPoint("LEFT", f.line1, "RIGHT", S.gap + extra, dy)
+        st.b:SetPoint("RIGHT", f.line1, "LEFT", -S.gap - extra, dy)
         f.ornTex = { st.b, st.a }
-        return S.gap + w, 0
+        return S.gap + extra + w, 0
+    elseif S and st and S.kind == "pair" then
+        -- zwei eigenstaendige Seiten: rechts die rechte, links die linke Haelfte der Vorlage (nicht Spiegelbild).
+        -- Gleicher Massstab (UI-Einheiten je Vorlagen-Pixel) fuer beide, ausgehend von der breiteren Seite, die
+        -- wie bei "sides" factor x Linienlaenge in [min, max] bekommt; die inneren Spitzen (midY) liegen auf Titelmitte.
+        -- Die linke Textur ist beim Erzeugen gespiegelt abgelegt (inneres Ende links wie bei jeder Seite) und wird
+        -- hier wieder zurueckgespiegelt: auf dem Bildschirm steht sie so, wie sie in der Vorlage links stand.
+        local R, Lf = S.right, S.left
+        local wRef = math.min(S.max, math.max(S.min, S.factor * f.ornLen)) * k
+        local wide = math.max(R.srcW or 0, Lf.srcW or 0)
+        local function size(X)
+            local w = (wide > 0 and (X.srcW or 0) > 0) and wRef * X.srcW / wide or wRef
+            return w, w / X.aspect
+        end
+        local wr, hr = size(R)
+        local wl, hl = size(Lf)
+        -- Abstand nach der breitesten Textzeile neben den Seiten (Zeile 1, Zeile 2, Untertitel; Seitenmitte auf
+        -- (midY - 0,5) x Hoehe). Beide Seiten bekommen den groesseren Zuschlag (symmetrisch); Groesse/Breite der
+        -- Seiten bleiben nach Zeile 1.
+        local half = math.max(sideReach(f, w1, hr, (R.midY - 0.5) * hr), sideReach(f, w1, hl, (Lf.midY - 0.5) * hl))
+        local extra = half - w1 / 2
+        local widest = math.max(wl, wr)
+        local q = screenShrink(half, S.gap, widest) -- nie breiter als der Bildschirm: proportional verkleinern
+        wr, hr, wl, hl, widest = wr * q, hr * q, wl * q, hl * q, widest * q
+        sizeOrn(st.a, R, nil, wr, hr, false, false, eff)
+        sizeOrn(st.b, Lf, nil, wl, hl, true, false, eff)
+        st.a:ClearAllPoints()
+        st.b:ClearAllPoints()
+        st.a:SetPoint("LEFT", f.line1, "RIGHT", S.gap + extra, (R.midY - 0.5) * hr)
+        st.b:SetPoint("RIGHT", f.line1, "LEFT", -S.gap - extra, (Lf.midY - 0.5) * hl)
+        f.ornTex = { st.b, st.a }
+        return S.gap + extra + widest, 0
     elseif S and st and S.kind == "frame" then
         -- Rahmen (Kartusche) um den Zonennamen: Hoehe so, dass Zeile 1 (plus Rand) in die gemessene Innenhoehe
         -- passt (x Verzierungsgroesse); ist der Name breiter als die Innenflaeche, werden die beiden Dehnstreifen
@@ -789,11 +936,35 @@ local function layout(f, card, cfg)
         f.line2:Hide()
     end
     local w1 = textWidth(f.line1)
+    -- Zeilen unter Zeile 1 mit senkrechter Lage (relativ zur Mitte von Zeile 1, nach oben positiv) und Breite; das
+    -- Layout "pair" haelt die Seiten davon fern. Der Untertitel wird dafuer schon hier gesetzt (setSubtitle wiederholt es).
+    f.rows = {}
+    local y = -t1.size / 2
+    if card.lines[2] then
+        local top = y - Card.LINE2_GAP
+        y = top - cfg.subzone.size
+        f.rows[#f.rows + 1] = { top = top, bottom = y, w = textWidth(f.line2) }
+    end
+    if card.subtitle then
+        Card.ApplyFont(f.sub, cfg.discovery.font, cfg.discovery.size)
+        f.sub:SetText(Zone.Clean(card.subtitle))
+        local top = y - Card.SUB_GAP
+        f.rows[#f.rows + 1] = { top = top, bottom = top - cfg.discovery.size, w = textWidth(f.sub) }
+    end
     f.ornLen = card.ornament and math.min(Card.ORN_MAX, math.max(Card.ORN_MIN, Card.ORN_FACTOR * w1)) or nil
     -- Stil nur bei der grossen Karte; Textur fehlt => schlicht
-    local style = f.ornLen and (cfg.ornament or "swirl") or nil
-    if Card.STYLES[style] and not f.styleTex[style] then style = "simple" end
-    f.ornStyle = style
+    local style, mode
+    if f.ornLen and card.motif then
+        -- Testkarte eines bestimmten Motivs (/lucid zone test <motiv>): unabhaengig von Haken, Stil und Zone;
+        -- Motiv ohne ladbare Textur => schlicht, Herkunft "missing" (der Aufrufer meldet es im Chat)
+        style, mode = card.motif, "test"
+        if not (Card.STYLES[style] and ensureStyle(f, style)) then style, mode = "simple", "missing" end
+    elseif f.ornLen then
+        style, mode = Card.ResolveOrnament(cfg, card.mapID, function(name) return ensureStyle(f, name) end)
+        -- Textur des gewaehlten Stils nicht ladbar => schlicht (auch beim festen Stil, wie bisher)
+        if Card.STYLES[style] and not ensureStyle(f, style) then style = "simple" end
+    end
+    f.ornStyle, f.ornMap, f.ornMode = style, card.mapID, mode
     local extH
     f.ornExt, extH = setOrnament(f, style, (tonumber(cfg.ornScale) or 100) / 100, w1,
         f.line2:IsShown() and f.line2 or f.line1, height)
@@ -1048,7 +1219,8 @@ function Card.RememberDebug(f)
                 phys = d.phys, filter = d.filter, srcLimited = d.srcLimited }
         end
     end
-    Card.lastDebug = { style = f.ornStyle, ppu = Card.PixelsPerUnit(), eff = effScale(f), parts = out }
+    Card.lastDebug = { style = f.ornStyle, ppu = Card.PixelsPerUnit(), eff = effScale(f), parts = out,
+        map = f.ornMap, mode = f.ornMode }
 end
 
 --- Diagnose-Zeilen (fuer Tests und /lucid zone debug)
@@ -1061,6 +1233,11 @@ function Card.DebugLines()
         lines[#lines + 1] = L.ZONE_DEBUG_LINE:format(p.part, p.cw, p.tiles, p.texW, p.texH, p.phys, p.filter,
             p.cw >= p.phys - 0.5 and L.ZONE_DEBUG_OK or (p.srcLimited and L.ZONE_DEBUG_SRC or L.ZONE_DEBUG_LOW))
     end
+    -- Zeile "Karte <uiMapID>, Motiv <name> (automatisch | fest | Rueckfall)": nur bei der grossen Karte
+    if d.mode then
+        lines[#lines + 1] = L.ZONE_DEBUG_MOTIF:format(d.map and tostring(d.map) or "-", tostring(d.style or "-"),
+            L["ZONE_DEBUG_MODE_" .. d.mode] or d.mode)
+    end
     return lines
 end
 
@@ -1071,6 +1248,7 @@ ns.AddHelp("HELP_ZONE_DEBUG")
 
 --- alle Karten sofort beenden (Ladebildschirm, Profilwechsel, Modul aus)
 function Card.Stop()
+    if Card.StopSequence then Card.StopSequence() end -- laeuft /lucid zone test alle, endet auch die Reihe
     for _, f in ipairs(frames) do finish(f) end
     active = nil
 end
@@ -1110,9 +1288,130 @@ function Card.TestTrigger(arg)
     return TEST_ALIASES[(arg or ""):lower()]
 end
 
+-- Motiv-Tests (/lucid zone test <motiv> | alle | stop) ---------------------------------------------
+-- Name-Vergleich: Kleinschreibung, ohne Leerzeichen und Satzzeichen ("Wald von Elwynn" = "waldvonelwynn")
+local function norm(s)
+    if type(s) ~= "string" then return "" end
+    return (s:lower():gsub("[%s%p]", ""))
+end
+
+--- Motiv aus Eingabe: Motivname aus ZoneMotifs.order oder Anzeigename (deDE/enUS/aktuelle Sprache), sonst nil
+function Card.TestMotif(arg)
+    local key = norm(arg)
+    if key == "" then return nil end
+    local order = (ns.ZoneMotifs or {}).order
+    if type(order) ~= "table" then return nil end
+    for _, name in ipairs(order) do
+        if norm(name) == key then return name end
+    end
+    local langs = {}
+    for _, lang in ipairs({ "deDE", "enUS" }) do langs[#langs + 1] = (ns.Locales or {})[lang] end
+    langs[#langs + 1] = L
+    for _, name in ipairs(order) do
+        for _, loc in ipairs(langs) do
+            if norm(loc["ZONE_ORNAMENT_" .. name]) == key then return name end
+        end
+    end
+    return nil
+end
+
+--- Anzeigename des Motivs (aktuelle Sprache), sonst der Motivname
+function Card.MotifLabel(motif)
+    local label = L["ZONE_ORNAMENT_" .. tostring(motif)]
+    return type(label) == "string" and label ~= "" and label or tostring(motif)
+end
+
+--- uiMapIDs des Motivs: Tabellenreihenfolge (ZoneMotifs.ids), sonst aufsteigend aus byMap
+local function motifMapIds(motif)
+    local M = ns.ZoneMotifs or {}
+    if type(M.ids) == "table" and type(M.ids[motif]) == "table" then return M.ids[motif] end
+    local ids = {}
+    for id, name in pairs(M.byMap or {}) do
+        if name == motif then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    return ids
+end
+
+--- Titel und Karte der Test-Karte: Name der ersten Zone des Motivs (lokalisiert, falls der Client einen liefert),
+--- sonst das Motiv-Label; zweite Rueckgabe: uiMapID der Zone (oder die erste ID)
+function Card.MotifTitle(motif)
+    local ids = motifMapIds(motif)
+    if C_Map and C_Map.GetMapInfo then
+        for _, id in ipairs(ids) do
+            local ok, info = pcall(C_Map.GetMapInfo, id)
+            local name = ok and type(info) == "table" and info.name or nil
+            if type(name) == "string" and not Compat.IsSecret(name) and name ~= "" then return name, id end
+        end
+    end
+    return Card.MotifLabel(motif), ids[1]
+end
+
+--- Testkarte eines bestimmten Motivs abspielen (grosse Karte, unabhaengig von Haken und aktueller Zone); fehlt die
+--- Textur, meldet der Chat es und die Karte zeigt ersatzweise den schlichten Stil. Liefert die Karte oder nil.
+function Card.TestMotifCard(motif)
+    if type(motif) ~= "string" then return nil end
+    local cfg = Zone.GetConfig()
+    local title, mapID = Card.MotifTitle(motif)
+    local label = Card.MotifLabel(motif)
+    local function ln(text, trigger) return { text = Zone.Clean(text), trigger = trigger } end
+    local card = { kind = "big", ornament = true, trigger = "zone", motif = motif, mapID = mapID, lines = { ln(title, "zone") } }
+    if cfg.subzone.on then card.lines[2] = ln(label, "subzone") end
+    card.stamps, card.test = {}, true
+    Zone.Present(card)
+    local f = active
+    if f and f.ornMode == "missing" then ns.Print(L.ZONE_TEST_MOTIF_MISSING, Zone.Esc(label)) end
+    return card
+end
+
+local seq = nil -- laufende Reihe { n = naechstes Motiv } oder nil; nur ein Zeitgeber je Schritt (kein Ticker)
+
+--- laufende Reihe beenden (true, wenn eine lief); die Karte selbst bleibt (Card.Stop beendet beides)
+function Card.StopSequence()
+    local was = seq ~= nil
+    seq = nil
+    return was
+end
+
+function Card.SequenceRunning() return seq ~= nil end
+
+local function seqStep(run)
+    if seq ~= run then return end
+    local order = (ns.ZoneMotifs or {}).order or {}
+    local motif = order[run.n]
+    if not motif then
+        seq = nil
+        ns.Print(L.ZONE_TEST_ALL_DONE, #order)
+        return
+    end
+    ns.Print(L.ZONE_TEST_ALL_STEP, run.n, #order, Zone.Esc(Card.MotifLabel(motif)))
+    Card.TestMotifCard(motif)
+    if seq ~= run then return end -- Present hat die Reihe beendet (z. B. Fehler)
+    run.n = run.n + 1
+    -- naechstes Motiv erst, wenn die Karte ausgeblendet ist: Gesamtdauer der Karte + 0,5 s
+    local cfg = Zone.GetConfig()
+    local gap = (tonumber(cfg.zone.fadeIn) or 0) + (tonumber(cfg.zone.hold) or 0) + (tonumber(cfg.zone.fadeOut) or 0) + 0.5
+    if C_Timer and C_Timer.After then
+        C_Timer.After(gap, function() seqStep(run) end)
+    else
+        seq = nil
+    end
+end
+
+--- alle Motive in der Reihenfolge von ZoneMotifs.order nacheinander abspielen (ersetzt eine laufende Reihe)
+function Card.TestAll()
+    local order = (ns.ZoneMotifs or {}).order
+    if type(order) ~= "table" or #order == 0 then return false end
+    local run = { n = 1 }
+    seq = run
+    seqStep(run)
+    return true
+end
+
 --- synthetische Karte fuer einen Ausloeser ("zone" | "subzone" | "discovery") abspielen; liefert die Karte
 function Card.Test(which)
     if which ~= "zone" and which ~= "subzone" and which ~= "discovery" then return nil end
+    Card.StopSequence() -- eine einzelne Testkarte beendet die Reihe
     local cfg = Zone.GetConfig()
     local zone = readText(GetZoneText) or L.ZONE_SAMPLE_ZONE
     local sub = readText(GetSubZoneText)
@@ -1122,7 +1421,7 @@ function Card.Test(which)
     if which == "subzone" then
         card = { kind = "small", ornament = false, trigger = "subzone", lines = { ln(sub, "subzone") } }
     else
-        card = { kind = "big", ornament = true, trigger = which, lines = { ln(zone, "zone") } }
+        card = { kind = "big", ornament = true, trigger = which, lines = { ln(zone, "zone") }, mapID = Zone.CurrentMapId() }
         if cfg.subzone.on then card.lines[2] = ln(sub, "subzone") end
         if which == "discovery" then card.subtitle = L.ZONE_DISCOVERED end
     end
@@ -1132,11 +1431,29 @@ function Card.Test(which)
 end
 
 Zone.commands.test = function(arg)
-    local which = Card.TestTrigger(arg)
-    if not which then
-        ns.Print(L.ZONE_TEST_INVALID, Zone.Esc(arg))
+    arg = arg or ""
+    local key = arg:lower()
+    if key == "stop" then
+        local was = Card.StopSequence()
+        Card.Stop()
+        ns.Print(was and L.ZONE_TEST_STOPPED or L.ZONE_TEST_NOTHING)
         return
     end
-    Card.Test(which)
+    if key == "alle" or key == "all" then
+        Card.TestAll()
+        return
+    end
+    local which = Card.TestTrigger(arg)
+    if which then
+        Card.Test(which)
+        return
+    end
+    local motif = Card.TestMotif(arg)
+    if motif then
+        Card.StopSequence()
+        Card.TestMotifCard(motif)
+        return
+    end
+    ns.Print(L.ZONE_TEST_INVALID, Zone.Esc(arg))
 end
 ns.AddHelp("HELP_ZONE_TEST")

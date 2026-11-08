@@ -15,8 +15,12 @@
 //   sehr feine Striche)
 // Alle Vorlagen-Stile auf einmal: node scripts/gen-zone-media.mjs --templates (liest docs/ornament-src/recipes.json,
 //   wandelt JPG per Headless-Chrome nach PNG, schreibt Media/zone-<name>.tga und modules/Zone/Ornaments.lua)
+// Layout "pair" (Zonen-Motive, "auto": true ohne layout.kind): eine 16:9-Vorlage mit zwei VERSCHIEDENEN Seiten (links ein
+//   Ornament, rechts ein anderes, breite leere Mitte). Teilung an der breitesten leeren Spalte nahe der Mitte
+//   (convert.split = Anteil erzwingt eine Stelle), je Seite Zuschnitt auf den Inhalt + eigene Stufen:
+//   Media/zone-<name>-left-<stufe>[-n].tga und zone-<name>-right-...; Ornaments.lua: left/right mit aspect, midY, srcW, levels
 
-import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import zlib from "node:zlib";
 import path from "node:path";
@@ -310,7 +314,7 @@ const percentile = (arr, q) => { const s = Float64Array.from(arr).sort(); return
  * side: "right" (rechte Bildhaelfte), "left" (linke Haelfte, gespiegelt) oder "full".
  */
 /** Vorlage vorbereiten: Luminanz -> Alpha/Grau, Seite/Zeilen waehlen, auf die Bounding-Box zuschneiden */
-export function prepareTemplate({ w, h, rgba }, { side = "right", rows = "full", floor = 0.03 } = {}) {
+export function prepareTemplate({ w, h, rgba }, { side = "right", rows = "full", floor = 0.03, split } = {}) {
   const L = new Float64Array(w * h);
   for (let i = 0; i < w * h; i++) {
     const o = i * 4;
@@ -324,7 +328,9 @@ export function prepareTemplate({ w, h, rgba }, { side = "right", rows = "full",
   for (let i = 0; i < w * h; i++) if (L[i] > 0.06) stroke.push(L[i]);
   if (stroke.length === 0) throw new Error("Vorlage leer: keine hellen Pixel auf dunklem Grund gefunden");
   const lMid = Math.max(0.1, percentile(stroke, 0.5)), lMax = Math.max(lMid, percentile(stroke, 0.99));
-  const x0s = side === "right" ? Math.floor(w / 2) : 0, x1s = side === "left" ? Math.ceil(w / 2) : w;
+  // split (Spalte): Trennstelle statt Bildmitte (Layout "pair")
+  const mid = Number.isInteger(split) ? split : null;
+  const x0s = side === "right" ? (mid ?? Math.floor(w / 2)) : 0, x1s = side === "left" ? (mid ?? Math.ceil(w / 2)) : w;
   const sw = x1s - x0s, A = new Float64Array(sw * h), G = new Float64Array(sw * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < sw; x++) {
@@ -452,9 +458,9 @@ export function convertToTga(img, opts = {}) {
 
 /** Ausschnitt [sx0, sx1) der vorbereiteten Vorlage in outW x outH rechnen: Flaechenmittel (Box-Supersampling),
  *  leichte Unschaerfemaske, dann optional gamma/bold */
-function renderRegion(P, sx0, sx1, outW, outH, { sharpen = 0.5, gamma = 1, bold = 0 } = {}) {
+function renderRegion(P, sx0, sx1, outW, outH, { sharpen = 0.5, gamma = 1, bold = 0 } = {}, sy0 = 0, sy1 = P.chh) {
   const { A, G, sw, bx0, by0, chh } = P;
-  const sxs = (sx1 - sx0) / outW, sys = chh / outH;
+  const sxs = (sx1 - sx0) / outW, sys = (sy1 - sy0) / outH;
   const n = Math.max(2, Math.ceil(Math.max(sxs, sys)) * 2);
   const at = (F, x, y) => {
     x = Math.min(P.cw - 1, Math.max(0, x)); y = Math.min(chh - 1, Math.max(0, y));
@@ -468,7 +474,7 @@ function renderRegion(P, sx0, sx1, outW, outH, { sharpen = 0.5, gamma = 1, bold 
       let sa = 0, sl = 0;
       for (let j = 0; j < n; j++) {
         for (let i = 0; i < n; i++) {
-          const px = sx0 + (x + (i + 0.5) / n) * sxs - 0.5, py = (y + (j + 0.5) / n) * sys - 0.5, v = at(A, px, py);
+          const px = sx0 + (x + (i + 0.5) / n) * sxs - 0.5, py = sy0 + (y + (j + 0.5) / n) * sys - 0.5, v = at(A, px, py);
           sa += v; sl += v * at(G, px, py);
         }
       }
@@ -572,9 +578,106 @@ export function buildLevels(img, opts = {}) {
   return { aspect: r, ...m, srcW: Math.round(P.cw), levels: levelsOf(P, opts) };
 }
 
+/**
+ * Hoehe der Spitze(n) am inneren Ende (Anteil von oben) fuer "pair": ab der innersten belegten Spalte (Alpha > 0,3) die
+ * Zeilen mit Inhalt in den naechsten 4 % der Breite; Mitte von oberster bis unterster Zeile. Eine Spitze liefert ihre
+ * Hoehe, mehrere uebereinander (Ober-/Unterschiene) ihre gemeinsame Mitte - dort sitzt der Titel.
+ */
+function tipMid(f) {
+  const { w: W, h: H, a } = f;
+  let x0 = -1;
+  for (let x = 0; x < W && x0 < 0; x++) for (let y = 0; y < H; y++) if (a[y * W + x] > 0.3) { x0 = x; break; }
+  if (x0 < 0) return 0.5;
+  let y0 = H, y1 = -1;
+  for (let x = x0; x < Math.min(W, x0 + Math.max(4, Math.round(W * 0.04))); x++) {
+    for (let y = 0; y < H; y++) if (a[y * W + x] > 0.3) { y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  }
+  return (y0 + y1 + 1) / 2 / H;
+}
+
+/**
+ * Trennspalte fuer zwei eigenstaendige Seiten: die breiteste leere Spalten-Folge (hellster Pixel der Spalte <= Schwelle)
+ * im mittleren Bereich [0,25 w, 0,75 w] (bei gleicher Breite die naechste zur Bildmitte); Trennstelle = ihre Mitte.
+ * Gibt es dort keine leere Spalte, gilt die Bildmitte. frac (0..1) erzwingt eine Trennstelle.
+ */
+export function findSplit({ w, h, rgba }, { rows = "full", frac } = {}) {
+  if (typeof frac === "number") return Math.min(w - 1, Math.max(1, Math.round(frac * w)));
+  const colMax = new Float64Array(w);
+  for (let y = 0; y < h; y++) {
+    if ((rows === "top" && y >= h / 2) || (rows === "bottom" && y < h / 2)) continue;
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4, v = ((0.2126 * rgba[o] + 0.7152 * rgba[o + 1] + 0.0722 * rgba[o + 2]) / 255) * (rgba[o + 3] / 255);
+      if (v > colMax[x]) colMax[x] = v;
+    }
+  }
+  const lo = Math.floor(w * 0.25), hi = Math.ceil(w * 0.75), centre = w / 2;
+  let best = null;
+  for (let x = lo; x < hi;) {
+    if (colMax[x] > 0.06) { x++; continue; }
+    let e = x;
+    while (e < hi && colMax[e] <= 0.06) e++;
+    const run = { len: e - x, mid: Math.floor((x + e) / 2) };
+    if (!best || run.len > best.len || (run.len === best.len && Math.abs(run.mid - centre) < Math.abs(best.mid - centre))) best = run;
+    x = e;
+  }
+  return best ? best.mid : Math.floor(centre);
+}
+
+/**
+ * Vorlage mit zwei verschiedenen Seiten -> { split, left, right }. Jede Seite wird an der Trennspalte abgeteilt, auf ihren
+ * Inhalt zugeschnitten und wie bei "sides" zu Stufen gerechnet: { aspect, midY, srcW, levels }. Das innere Ende liegt in
+ * beiden Faellen links in der Textur (die linke Haelfte wird beim Erzeugen gespiegelt abgelegt; Card.lua spiegelt sie
+ * beim Zeichnen zurueck, auf dem Bildschirm steht also jede Seite wie in der Vorlage). Die Helligkeits-Normierung gilt
+ * fuer das ganze Bild, damit beide Seiten gleich hell werden.
+ */
+export function buildPair(img, opts = {}) {
+  const split = findSplit(img, { rows: opts.rows, frac: opts.split });
+  const one = (side) => {
+    const o = { ...opts, side, split };
+    const P = prepareTemplate(img, o);
+    const r = P.cw / P.chh;
+    const midY = tipMid(renderRegion(P, 0, P.cw, 1024, Math.max(8, Math.round(1024 / r)), { sharpen: 0 }));
+    return { aspect: r, midY, srcW: Math.round(P.cw), levels: levelsOf(P, { ...o, strips: true }) };
+  };
+  return { split, left: one("left"), right: one("right") };
+}
+
 /** Feld (eingebaute Entwuerfe) -> Stufen wie bei den Vorlagen (Quelle ohne Zuschnitt) */
 export function fieldLevels(f, opts = {}) {
   return levelsOf({ A: f.a, G: f.l, sw: f.w, bx0: 0, by0: 0, cw: f.w, chh: f.h }, { sharpen: 0.3, ...opts });
+}
+
+/**
+ * Zerlegung eines Inhalts (Breite W = Zweierpotenz, Hoehe th) in waagerechte Streifen voller Breite mit kleinster
+ * Gesamtflaeche: Streifenhoehe Hb = Zweierpotenz mit W * Hb * 4 + 18 < 1 MiB, der letzte Streifen nur so hoch wie
+ * noetig (Zweierpotenz). Unter Zerlegungen mit hoechstens 10 % mehr Flaeche als die kleinste gewinnt die mit den
+ * wenigsten Kacheln. Liefert [{ r0, r1, boxH }] (Inhaltszeilen r0..r1, Texturhoehe boxH); die letzte Zeile r1 ist die
+ * Gesamthoehe (th, bei 1-2 Restzeilen um diese kleiner).
+ */
+export function stripPlan(W, th) {
+  let best = null, minArea = Infinity;
+  const plans = [];
+  for (let Hb = 8; Hb <= 1024; Hb *= 2) {
+    if (W * Hb * 4 + 18 >= LIMIT) break;
+    // ein Rest von hoechstens 2 Zeilen waere eine eigene Kachel fuer fast nichts: der Inhalt wird um diese Zeilen
+    // gestaucht (unter 0,5 %, nicht sichtbar)
+    let n = Math.ceil(th / Hb), rem = th - (n - 1) * Hb;
+    if (n > 1 && rem <= 2) { n--; rem = Hb; }
+    const lastH = nextPot(rem), area = W * ((n - 1) * Hb + lastH);
+    plans.push({ Hb, n, lastH, rem, area });
+    minArea = Math.min(minArea, area);
+  }
+  if (plans.length === 0) throw new Error("Streifen passen nicht unter 1 MiB (Breite " + W + ")");
+  for (const p of plans) {
+    if (p.area > minArea * 1.1) continue;
+    if (!best || p.n < best.n || (p.n === best.n && p.area < best.area)) best = p;
+  }
+  const rows = [];
+  for (let i = 0; i < best.n; i++) {
+    const r0 = i * best.Hb, r1 = i === best.n - 1 ? r0 + best.rem : r0 + best.Hb;
+    rows.push({ r0, r1, boxH: i === best.n - 1 ? best.lastH : best.Hb });
+  }
+  return rows;
 }
 
 function levelsOf(P, opts) {
@@ -586,6 +689,17 @@ function levelsOf(P, opts) {
   const levels = [], maxCw = Math.min(opts.maxW || 2048, P.cw * 1.25);
   for (const [key, target] of [["t", 256], ["s", 512], ["l", 1024], ["x", 2048]]) {
     if (target > maxCw && key !== "t") break;
+    if (opts.strips) {
+      // waagerechte Streifen voller Breite (Layout pair): kaum Verschnitt, Naehte an Texturkanten
+      const Ws = target, tiles = [], plan = stripPlan(nextPot(Ws), Math.max(4, Math.round(Ws / r)));
+      const ths = plan[plan.length - 1].r1;
+      for (const { r0, r1, boxH } of plan) {
+        const tile = renderRegion(P, 0, P.cw, Ws, r1 - r0, ro, (P.chh * r0) / ths, (P.chh * r1) / ths);
+        tiles.push({ ...placeInBox(tile, nextPot(Ws), boxH, "left"), from: 0, to: 1, y0: r0 / ths, y1: r1 / ths, w: nextPot(Ws), h: boxH });
+      }
+      levels.push({ key, cw: Ws, tiles });
+      continue;
+    }
     // Hoehe: Zweierpotenz; waere sie mehr als 1,4-mal so hoch wie der Inhalt, halbe Hoehe und schmalerer Inhalt
     let Wt = target, th = Math.max(4, Math.round(Wt / r)), H = nextPot(th);
     if (H / th > 1.4 && H > 8 && Math.floor((H / 2) * r) >= 0.9 * target) { H /= 2; Wt = Math.floor(H * r); th = H; }
@@ -611,6 +725,9 @@ function levelsOf(P, opts) {
 
 const NAME_RE = /^[a-z][a-z0-9]{1,15}$/;
 const LAYOUT_NUM = ["factor", "extra", "min", "max", "gap", "top", "alpha", "grow", "marginX", "marginY"];
+// Zonen-Motive ("auto": true) ohne eigenes layout.kind sind zwei eigenstaendige Seiten ("pair")
+const PAIR_DEFAULTS = { kind: "pair", factor: 1.6, min: 150, max: 340, gap: 6, alpha: 0.95, grow: 0.94 };
+export const layoutOf = (r) => (r.auto && !r.layout?.kind ? { ...PAIR_DEFAULTS, ...(r.layout || {}) } : r.layout || {});
 const luaStr = (s) => {
   if (typeof s !== "string" || s.length === 0 || s.length > 40 || /[\x00-\x1f|\\"]/.test(s)) throw new Error("Beschriftung ungueltig: " + s);
   return '"' + s + '"';
@@ -620,13 +737,18 @@ const luaNum = (v, what) => {
   return String(Math.round(v * 10000) / 10000);
 };
 
-/** Lua-Quelltext der Stil-Tabelle (entries: Rezept + gemessene Werte { aspect, midY, fill }) */
+/**
+ * Lua-Quelltext der Stil-Tabelle (entries: Rezept + gemessene Werte { aspect, midY, fill }).
+ * Rezepte mit "auto": true sind Zonen-Motive: sie stehen in O.order NACH allen uebrigen Vorlagen-Stilen und zusaetzlich
+ * in O.motif[name] = true (Ausklapper: Gruppe nach den bisherigen Stilen; Motiv-Wahl der Karte). Motive duerfen keine
+ * Rahmen sein: die Dehnstreifen zerreissen geschwungene Motive.
+ */
 export function ornamentsLua(entries, builtin) {
   const lines = [
     "-- ERZEUGT von scripts/gen-zone-media.mjs --templates aus docs/ornament-src/recipes.json. Nicht von Hand aendern.",
     "-- Vorlagen-Stile der Zonenkarte (Card.STYLES) samt Beschriftung; Texturen in Media/zone-<name>.tga.",
     "local _, ns = ...",
-    "local O = { order = {}, styles = {} }",
+    "local O = { order = {}, styles = {}, motif = {} }",
     "ns.ZoneOrnaments = O",
     "local function add(name, style, deDE, enUS)",
     "    O.order[#O.order + 1] = name",
@@ -638,10 +760,27 @@ export function ornamentsLua(entries, builtin) {
   ];
   const seen = new Set();
   for (const e of entries) {
+    if (e.auto !== undefined && typeof e.auto !== "boolean") throw new Error(e.name + ": auto muss true/false sein");
+    if (e.auto && layoutOf(e).kind === "frame") throw new Error(e.name + ": Zonen-Motive duerfen kein frame-Layout haben");
+  }
+  // Reihenfolge: bisherige Vorlagen-Stile, dann Zonen-Motive (je in Rezept-Reihenfolge)
+  const ordered = [...entries.filter((e) => !e.auto), ...entries.filter((e) => e.auto)];
+  for (const e of ordered) {
     if (!NAME_RE.test(e.name || "") || seen.has(e.name)) throw new Error("Stilname ungueltig/doppelt: " + e.name);
     seen.add(e.name);
-    const L = e.layout || {};
-    if (L.kind !== "sides" && L.kind !== "bar" && L.kind !== "frame") throw new Error(e.name + ": layout.kind sides|bar|frame");
+    const L = layoutOf(e);
+    if (!["sides", "bar", "frame", "pair"].includes(L.kind)) throw new Error(e.name + ": layout.kind sides|bar|frame|pair");
+    if (L.kind === "pair") {
+      const side = (X, what) => {
+        if (!X) throw new Error(e.name + ": pair braucht " + what);
+        return `{ aspect = ${luaNum(X.aspect, what + ".aspect")}, midY = ${luaNum(X.midY, what + ".midY")}, fill = 1, srcW = ${luaNum(X.srcW ?? 0, what + ".srcW")}, levels = { ${levelsLua(e.name, X.levels, what).join(", ")} } }`;
+      };
+      const pf = [`kind = "pair"`];
+      for (const k of LAYOUT_NUM) if (L[k] !== undefined) pf.push(`${k} = ${luaNum(L[k], e.name + "." + k)}`);
+      pf.push(`right = ${side(e.right, "right")}`, `left = ${side(e.left, "left")}`);
+      lines.push(`add("${e.name}", { ${pf.join(", ")} },`, `    ${luaStr(e.label?.deDE)}, ${luaStr(e.label?.enUS)})`);
+      continue;
+    }
     const f = [`kind = "${L.kind}"`, `aspect = ${luaNum(e.aspect, "aspect")}`, `midY = ${luaNum(e.midY, "midY")}`, "fill = 1",
       `srcW = ${luaNum(e.srcW ?? 0, "srcW")}`];
     if (L.kind === "frame") f.push(`innerW = ${luaNum(e.innerW, "innerW")}`, `innerH = ${luaNum(e.innerH, "innerH")}`,
@@ -652,6 +791,7 @@ export function ornamentsLua(entries, builtin) {
     f.push(`levels = { ${lv.join(", ")} }`);
     lines.push(`add("${e.name}", { ${f.join(", ")} },`, `    ${luaStr(e.label?.deDE)}, ${luaStr(e.label?.enUS)})`);
   }
+  for (const e of ordered) if (e.auto) lines.push(`O.motif.${e.name} = true`);
   // eingebaute Stile (Geschwungen/Filigran): nur Stufen, Layout steht in Card.lua
   lines.push("O.builtin = {}");
   for (const [name, levels] of Object.entries(builtin || {})) lines.push(`O.builtin.${name} = { ${levelsLua(name, levels).join(", ")} }`);
@@ -659,10 +799,11 @@ export function ornamentsLua(entries, builtin) {
 }
 
 /** Stufen als Lua: { cw = Inhaltsbreite in Pixeln, tiles = { { file, u0, u1, v0, v1, from, to, w, h } } } (klein -> gross) */
-function levelsLua(name, levels) {
+function levelsLua(name, levels, side) {
+  const base = side ? name + "-" + side : name;
   const lv = (levels || []).map((l) => {
       if (!/^[tslx]$/.test(l.key)) throw new Error(name + ": Stufe ungueltig");
-      const t = l.tiles.map((x, i) => `{ file = "zone-${name}-${l.key}${l.tiles.length > 1 ? "-" + (i + 1) : ""}", u0 = ${luaNum(x.u0, "u0")}, u1 = ${luaNum(x.u1, "u1")}, v0 = ${luaNum(x.v0, "v0")}, v1 = ${luaNum(x.v1, "v1")}, from = ${luaNum(x.from, "from")}, to = ${luaNum(x.to, "to")}, w = ${luaNum(x.w ?? 0, "w")}, h = ${luaNum(x.h ?? 0, "h")} }`);
+      const t = l.tiles.map((x, i) => `{ file = "zone-${base}-${l.key}${l.tiles.length > 1 ? "-" + (i + 1) : ""}", u0 = ${luaNum(x.u0, "u0")}, u1 = ${luaNum(x.u1, "u1")}, v0 = ${luaNum(x.v0, "v0")}, v1 = ${luaNum(x.v1, "v1")}, from = ${luaNum(x.from, "from")}, to = ${luaNum(x.to, "to")}, ${x.y0 !== undefined ? `y0 = ${luaNum(x.y0, "y0")}, y1 = ${luaNum(x.y1, "y1")}, ` : ""}w = ${luaNum(x.w ?? 0, "w")}, h = ${luaNum(x.h ?? 0, "h")} }`);
       return `{ cw = ${luaNum(l.cw, "cw")}, tiles = { ${t.join(", ")} } }`;
     });
   if (lv.length === 0) throw new Error(name + ": keine Stufen");
@@ -694,28 +835,48 @@ export function jpgToPng(jpg, png) {
   if (r.status !== 0 || !existsSync(png)) throw new Error("Umwandlung JPG -> PNG fehlgeschlagen: " + jpg);
 }
 
-function runTemplates() {
-  const dir = path.join(ROOT, "docs", "ornament-src");
+/** root: Projektwurzel (Standard: dieses Repo); Tests geben einen Temp-Ordner mit docs/ornament-src/ an */
+export function runTemplates(root = ROOT, { quiet = false } = {}) {
+  const log = quiet ? () => {} : console.log;
+  const media = path.join(root, "addon", "Lucid", "Media");
+  mkdirSync(media, { recursive: true });
+  mkdirSync(path.join(root, "addon", "Lucid", "modules", "Zone"), { recursive: true });
+  const dir = path.join(root, "docs", "ornament-src");
   const recipes = JSON.parse(readFileSync(path.join(dir, "recipes.json"), "utf8"));
   const entries = [], written = new Set();
   for (const r of recipes) {
     if (!NAME_RE.test(r.name || "")) throw new Error("Stilname ungueltig: " + r.name);
+    if (r.auto !== undefined && typeof r.auto !== "boolean") throw new Error(r.name + ": auto muss true/false sein");
+    const layout = layoutOf(r);
+    if (r.auto && layout.kind === "frame") throw new Error(r.name + ": Zonen-Motive duerfen kein frame-Layout haben");
     const src = path.join(dir, path.basename(r.src));
     let pngPath = src;
     if (/\.jpe?g$/i.test(src)) {
       pngPath = src.replace(/\.jpe?g$/i, ".png");
       if (!existsSync(pngPath)) jpgToPng(src, pngPath);
     }
-    const res = buildLevels(decodePng(readFileSync(pngPath)), r.convert || {});
-    for (const l of res.levels) {
-      l.tiles.forEach((t, i) => {
-        const file = `zone-${r.name}-${l.key}${l.tiles.length > 1 ? "-" + (i + 1) : ""}.tga`, buf = tga(t.field);
-        written.add(file);
-        if (buf.length >= LIMIT) throw new Error(file + " >= 1 MiB");
-        writeFileSync(path.join(MEDIA, file), buf);
-        console.log(`${file}: ${t.field.w} x ${t.field.h}, ${buf.length} B (Inhalt ${l.cw} px breit)`);
-      });
+    const writeLevels = (levels, base) => {
+      for (const l of levels) {
+        l.tiles.forEach((t, i) => {
+          const file = `zone-${base}-${l.key}${l.tiles.length > 1 ? "-" + (i + 1) : ""}.tga`, buf = tga(t.field);
+          written.add(file);
+          if (buf.length >= LIMIT) throw new Error(file + " >= 1 MiB");
+          writeFileSync(path.join(media, file), buf);
+          log(`${file}: ${t.field.w} x ${t.field.h}, ${buf.length} B (Inhalt ${l.cw} px breit)`);
+        });
+      }
+    };
+    const img = decodePng(readFileSync(pngPath));
+    if (layout.kind === "pair") {
+      const res = buildPair(img, r.convert || {});
+      writeLevels(res.left.levels, r.name + "-left");
+      writeLevels(res.right.levels, r.name + "-right");
+      log(`${r.name}: Trennung bei Spalte ${res.split}; links aspect ${res.left.aspect.toFixed(3)} midY ${res.left.midY.toFixed(4)} srcW ${res.left.srcW}, rechts aspect ${res.right.aspect.toFixed(3)} midY ${res.right.midY.toFixed(4)} srcW ${res.right.srcW}`);
+      entries.push({ ...r, layout, ...res });
+      continue;
     }
+    const res = buildLevels(img, r.convert || {});
+    writeLevels(res.levels, r.name);
     entries.push({ ...r, ...res });
   }
   // eingebaute Verzierungen (Vektor-Entwuerfe in doppelter Aufloesung) ebenfalls als Stufen
@@ -724,19 +885,19 @@ function runTemplates() {
     builtin[name] = fieldLevels(make(2));
     for (const l of builtin[name]) l.tiles.forEach((t, i) => {
       const file = `zone-${name}-${l.key}${l.tiles.length > 1 ? "-" + (i + 1) : ""}.tga`;
-      writeFileSync(path.join(MEDIA, file), tga(t.field));
+      writeFileSync(path.join(media, file), tga(t.field));
       written.add(file);
-      console.log(`${file}: ${t.field.w} x ${t.field.h} (Inhalt ${l.cw} px breit)`);
+      log(`${file}: ${t.field.w} x ${t.field.h} (Inhalt ${l.cw} px breit)`);
     });
   }
-  writeFileSync(path.join(ROOT, "addon", "Lucid", "modules", "Zone", "Ornaments.lua"), ornamentsLua(entries, builtin));
+  writeFileSync(path.join(root, "addon", "Lucid", "modules", "Zone", "Ornaments.lua"), ornamentsLua(entries, builtin));
   // veraltete Stufen-Dateien der Vorlagen-Stile entfernen (nur zone-<rezept>-*.tga in Media)
   const names = new Set([...recipes.map((r) => r.name), "swirl", "filigree"]);
-  for (const f of readdirSync(MEDIA)) {
-    const m = /^zone-([a-z0-9]+)-[a-z](-\d+)?\.tga$/.exec(f);
-    if (m && names.has(m[1]) && !written.has(f)) { unlinkSync(path.join(MEDIA, f)); console.log("entfernt: " + f); }
+  for (const f of readdirSync(media)) {
+    const m = /^zone-([a-z0-9]+)(?:-left|-right)?-[a-z](-\d+)?\.tga$/.exec(f);
+    if (m && names.has(m[1]) && !written.has(f)) { unlinkSync(path.join(media, f)); log("entfernt: " + f); }
   }
-  console.log(`Ornaments.lua: ${entries.length} Stil(e)`);
+  log(`Ornaments.lua: ${entries.length} Stil(e)`);
 }
 
 const args = process.argv.slice(2);

@@ -4,3 +4,8 @@ node_modules/
 .env.*
 !.env.example
 tests/screens/
+docs/ornament-src/motiv-*.png
+
+# Gemini-Kandidaten der Zonen-Motive (freigegebene Vorlagen liegen unter docs/ornament-src/motiv-*.jpg)
+docs/ornament-src/kandidaten/
+docs/ornament-src/kandidaten-3d-verworfen/

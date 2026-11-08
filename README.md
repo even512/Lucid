@@ -25,8 +25,10 @@ Chat. An optional glass look hides the chat background, tabs and buttons until t
 Chat messages can also fade out one by one after a time you set.
 
 Zone text. A card with the zone name and subzone replaces Blizzard's zone text, with a choice of ornaments, glow, a light
-band behind the text, font, size and timing. Newly discovered areas get their own card. You can move it, and
-`/lucid zone test` plays a sample.
+band behind the text, font, size and timing. Every classic zone and the WoW Forever zones have their own ornament that
+matches the zone (for example Ironforge, Tirisfal, Orgrimmar or Mount Hyjal); untick "Ornament adapts to the zone" to use
+one fixed ornament everywhere. Newly discovered areas get their own card. You can move it, and `/lucid zone test` plays
+a sample (`/lucid zone test all` shows every zone ornament).
 
 Minimap. Besides Blizzard's round map there are a square and a rectangular shape (3:2, 4:3, 16:9, 2:3, 3:4) with a choice
 of frames, a frame strength, a size and an optional N marker. Coordinates, location name, clock, calendar, mail, tracking,
@@ -75,7 +77,7 @@ well. These commands are available in the game:
 | `/lucid chat glass on\|off` | chat look: background, tabs and buttons only on mouseover or while typing |
 | `/lucid chat fade on\|off` | fade out chat messages one by one |
 | `/lucid chat time <sec>` | how long a message stays visible (1 to 600 seconds) |
-| `/lucid zone` | status of the zone text; `zone on\|off`, `zone test [zone\|subzone\|discovery]`, `zone move`, `zone seed` |
+| `/lucid zone` | status of the zone text; `zone on\|off`, `zone test [zone\|subzone\|discovery\|<motif>\|all\|stop]`, `zone move`, `zone seed` |
 | `/lucid minimap` | `minimap shape <round\|square\|rect> [ratio]`, `minimap scale`, `minimap border`, `minimap bordersize`, `minimap north on\|off`, `minimap button [on\|off]` |
 | `/lucid nameplates` | `on`, `off`, `status`, `preset <combat\|combattarget\|off>` |
 | `/lucid camera` | `on`, `off`, `status`, `preset <cinematic\|cinematicCalm\|cinematicDynamic\|classic\|combatwide>` |

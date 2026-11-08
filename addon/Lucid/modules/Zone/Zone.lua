@@ -7,6 +7,8 @@
 --   glow / band (0-100 %, Standard 50 = Werkswert, 0 = aus; Nachtrag 03.11.): Staerke von Glanz und Lichtband,
 --   ornament (Schluessel aus Zone.ORNAMENTS, Standard "swirl"), ornScale (50-200 %, Standard 100) und ornDelay
 --   (0-2 s nach Kartenstart, Standard 0,2), ornFade (0,2-2 s, Standard 0,6): Verzierung.
+--   autoOrnament (bool, Standard an): die grosse Karte waehlt das Zonen-Motiv der Zone (ZoneMotifs.lua); "ornament" gilt
+--   dann fuer Zonen ohne Motiv und als fester Stil bei aus. ornament = "none" schaltet die Verzierung immer ab.
 -- Schriften sind nur Schluessel aus einer festen Liste; ein Pfad steht nie im Profil.
 local _, ns = ...
 local Store = ns.Store
@@ -30,8 +32,18 @@ Zone.LIMITS = {
     ornFade = { 0.2, 2 }, -- Einblenden der Verzierung in s
 }
 -- eingebaute Stile + Vorlagen-Stile aus Ornaments.lua (erzeugt aus docs/ornament-src/recipes.json) + schlicht/keine
+-- Reihenfolge: swirl, filigree, bisherige Vorlagen, Zonen-Motive (O.motif), simple, none
 Zone.ORNAMENTS = { "swirl", "filigree" }
-for _, name in ipairs((ns.ZoneOrnaments or {}).order or {}) do Zone.ORNAMENTS[#Zone.ORNAMENTS + 1] = name end
+do
+    local O = ns.ZoneOrnaments or {}
+    local motif = O.motif or {}
+    for _, name in ipairs(O.order or {}) do
+        if not motif[name] then Zone.ORNAMENTS[#Zone.ORNAMENTS + 1] = name end
+    end
+    for _, name in ipairs(O.order or {}) do
+        if motif[name] then Zone.ORNAMENTS[#Zone.ORNAMENTS + 1] = name end
+    end
+end
 Zone.ORNAMENTS[#Zone.ORNAMENTS + 1] = "simple"
 Zone.ORNAMENTS[#Zone.ORNAMENTS + 1] = "none"
 -- entfernte Stile (Welle B5-3): gespeicherte Profile mit diesen Werten fallen still auf den Standard zurueck, statt
@@ -63,6 +75,7 @@ function Zone.Defaults()
         glow = 50,
         band = 50,
         ornament = "swirl",
+        autoOrnament = true,
         ornScale = 100,
         ornDelay = 0.2,
         ornFade = 0.6,
@@ -136,9 +149,13 @@ function Zone.Validate(v)
             local r = Zone.LIMITS.strength
             out[k] = math.floor(math.min(r[2], math.max(r[1], x)) + 0.5)
         elseif k == "ornament" then
-            if type(x) == "string" and Zone.REMOVED_ORNAMENTS[x] then x = def.ornament end
+            -- entfernte Stile fallen auf den Standard; ein Name, der heute wieder ein Stil ist (Motiv "frost"), bleibt gueltig
+            if type(x) == "string" and Zone.REMOVED_ORNAMENTS[x] and not ORNAMENT_SET[x] then x = def.ornament end
             if type(x) ~= "string" or not ORNAMENT_SET[x] then return nil, k end
             out.ornament = x
+        elseif k == "autoOrnament" then
+            -- kein bool => Standard (an); additives Feld, alte Profile ohne Feld bekommen ebenfalls den Standard
+            if type(x) == "boolean" then out.autoOrnament = x end
         elseif k == "ornScale" then
             -- wie die Staerken: Zahl Pflicht, auf 50-200 geklemmt und gerundet
             if type(x) ~= "number" or x ~= x then return nil, k end
@@ -162,7 +179,7 @@ function Zone.Validate(v)
     if out.enabled == nil then out.enabled = def.enabled end
     if out.minGap == nil then out.minGap = def.minGap end
     if out.pos == nil then out.pos = def.pos end
-    for _, k in ipairs({ "glow", "band", "ornament", "ornScale", "ornDelay", "ornFade" }) do
+    for _, k in ipairs({ "glow", "band", "ornament", "autoOrnament", "ornScale", "ornDelay", "ornFade" }) do
         if out[k] == nil then out[k] = def[k] end
     end
     for _, k in ipairs(Zone.TRIGGERS) do
@@ -373,8 +390,17 @@ function Zone.CardSig(card)
     return card.kind .. "\n" .. card.lines[1].text .. "\n" .. (card.lines[2] and card.lines[2].text or "")
 end
 
+--- uiMapID der Zonenkarte des Spielers fuer die Motiv-Wahl (nil: nicht bestimmbar, Instanz, Fehler, Secret)
+function Zone.CurrentMapId()
+    if not (ns.Discovery and ns.Discovery.CurrentZoneMapId) then return nil end
+    local ok, id = pcall(ns.Discovery.CurrentZoneMapId)
+    if not ok then return nil end
+    return Compat.Num(id)
+end
+
 local function present(card)
     local t = Zone.GetConfig()[card.trigger]
+    if card.kind == "big" and card.mapID == nil then card.mapID = Zone.CurrentMapId() end
     local sig = Zone.CardSig(card)
     if running() and current.sig == sig then
         -- gleiche Zeilen wie die laufende Karte: ignorieren. Bringt die neue Karte aber den Entdeckungs-Untertitel
@@ -617,6 +643,33 @@ Zone.commands[""] = function()
     end
 end
 
+--- Verzierung passt sich der Zone an: /lucid zone auto [on|off] (ohne Argument: Zustand)
+function Zone.SetAutoOrnament(on)
+    if type(on) ~= "boolean" then return nil, "ZONE_VALUE_INVALID" end
+    local p = Store.GetActive()
+    if not p then return nil, "ZONE_VALUE_INVALID" end
+    local z = Zone.GetConfig() -- frische, gueltige Kopie
+    z.autoOrnament = on
+    p.zone = z
+    return true
+end
+
+Zone.commands.auto = function(arg)
+    arg = (arg or ""):lower()
+    if arg == "" then
+        ns.Print(L.ZONE_AUTO_STATUS, Zone.GetConfig().autoOrnament and L.ZONE_ON or L.ZONE_OFF)
+        return
+    end
+    if arg ~= "on" and arg ~= "off" then
+        ns.Print(L.ZONE_ONOFF_INVALID, Zone.Esc(arg))
+        return
+    end
+    if Zone.SetAutoOrnament(arg == "on") then
+        ns.Print(arg == "on" and L.ZONE_AUTO_ENABLED or L.ZONE_AUTO_DISABLED)
+        if ns.Config and ns.Config.Refresh then pcall(ns.Config.Refresh) end
+    end
+end
+
 Zone.commands.on = function()
     if Zone.SetEnabled(true) then ns.Print(L.ZONE_ENABLED) end
 end
@@ -637,3 +690,4 @@ ns.commands.zone = function(rest)
     end
 end
 ns.AddHelp("HELP_ZONE")
+ns.AddHelp("HELP_ZONE_AUTO")

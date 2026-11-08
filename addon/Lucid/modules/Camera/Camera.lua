@@ -20,6 +20,7 @@ Camera.MAX_RULES = 8
 Camera.ZOOM_MIN, Camera.ZOOM_MAX = 1, Compat.isRetail and 39 or 50 -- Ziel-Distanz in Yards
 Camera.ZOOM_SECONDS_MIN, Camera.ZOOM_SECONDS_MAX = 0.1, 5
 Camera.OFFSET_SECONDS_MIN, Camera.OFFSET_SECONDS_MAX = 0, 2
+Camera.FOCUS_SECONDS_MIN, Camera.FOCUS_SECONDS_MAX = 0, 3
 Camera.EXPERIMENTAL_EVENT = "EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED"
 Camera.FOV_VALID_MIN, Camera.FOV_VALID_MAX = 30, 150 -- grobe Pruefgrenzen (Profil/Import); wirksam gilt Camera.FovRange()
 Camera.FOV_FALLBACK_MIN, Camera.FOV_FALLBACK_MAX = 50, 90 -- ohne GetCameraFOVDefaults
@@ -97,6 +98,7 @@ Camera.DEFAULTS = {
     zoomSeconds = 0.6,    -- Dauer des weichen Uebergangs zu einer Ziel-Distanz
     offsetByDistance = false, -- Schulterversatz nach Kameraabstand skalieren (Offset.lua); die Filmisch-Voreinstellungen schalten ihn an
     offsetSeconds = 0.6,      -- Dauer des weichen Uebergangs des Schulterversatzes bei Regel-/Zustandswechsel (0 = sofort)
+    focusSeconds = 1.5,       -- Dauer des weichen Ein-/Ausblendens des Zielfokus auf Gegner (Focus.lua, 0 = sofort)
 }
 
 -- Einstellungen -------------------------------------------------------------------------------------
@@ -204,6 +206,9 @@ function Camera.Validate(v)
         elseif k == "offsetSeconds" then
             if type(x) ~= "number" or x ~= x or x < Camera.OFFSET_SECONDS_MIN or x > Camera.OFFSET_SECONDS_MAX then return nil, k end
             out[k] = x
+        elseif k == "focusSeconds" then
+            if type(x) ~= "number" or x ~= x or x < Camera.FOCUS_SECONDS_MIN or x > Camera.FOCUS_SECONDS_MAX then return nil, k end
+            out[k] = x
         elseif k == "base" then
             local b, detail = validateBase(x)
             if not b then return nil, "base." .. tostring(detail) end
@@ -238,6 +243,7 @@ function Camera.GetConfig()
     return {
         enabled = pick("enabled"), suppressPopup = pick("suppressPopup"), autoComfort = pick("autoComfort"),
         zoomSeconds = pick("zoomSeconds"), offsetByDistance = pick("offsetByDistance"), offsetSeconds = pick("offsetSeconds"),
+        focusSeconds = pick("focusSeconds"),
         base = { cvars = Store.DeepCopy(clean.base and clean.base.cvars or {}), zoom = clean.base and clean.base.zoom or nil },
         rules = Store.DeepCopy(clean.rules or {}),
     }
@@ -394,15 +400,24 @@ function Camera.Apply()
     local cfg = Camera.GetConfig()
     if not (active and cfg.enabled) or Camera.IsLocked() then
         local res = restoreOwned()
+        Camera.Zoom.Resync() -- restoreOwned kann cameraZoomSpeed mitten in einer Fahrt zurueckschreiben
         syncStateNeeds(nil)
         setPopupSuppressed(false)
         Camera.Offset.Sync(nil)
+        Camera.Focus.Stop()
         Camera.Zoom.Release()
         return res
     end
     syncStateNeeds(cfg)
     local static = Camera.DesiredStatic(cfg)
     local desired = scaleOffset(cfg, Store.DeepCopy(static))
+    -- Zielfokus weich fuehren (Focus.lua): waehrend eines Uebergangs gelten Enable 1 und die Zwischenstaerken statt der Sollwerte;
+    -- bei Pause schreibt der Uebergang nichts (der Pause-Filter hat die Action-Cam-Werte aus static entfernt)
+    local focus = nil
+    if paused then Camera.Focus.Stop() else focus = Camera.Focus.Plan(static, cfg.focusSeconds) end
+    if focus then
+        for id, v in pairs(focus) do desired[id] = v end
+    end
     if cfg.suppressPopup and anyExperimental(desired) then
         setPopupSuppressed(true)
     elseif not cfg.suppressPopup then
@@ -412,6 +427,7 @@ function Camera.Apply()
     local planned = Camera.Offset.Plan(static.test_cameraOverShoulder, desired.test_cameraOverShoulder, cfg.offsetByDistance, cfg.offsetSeconds)
     if desired.test_cameraOverShoulder ~= nil then desired.test_cameraOverShoulder = planned end
     local res = CVars.Apply(desired)
+    Camera.Zoom.Resync() -- ein hier geschriebenes cameraZoomSpeed darf das Fahrt-Tempo nicht ueberschreiben
     Camera.Zoom.Update(Camera.DesiredZoom(cfg), cfg.zoomSeconds)
     if desired[CVars.KEEP_CENTERED] ~= nil and not comfortNotified then
         comfortNotified = true
@@ -459,7 +475,8 @@ end
 
 function Camera.Set(path, value) return Camera.SetMany({ [path] = value }) end
 
--- Voreinstellungen (ersetzen Grundwerte und Regeln, die Schalter bleiben; die Filmisch-Stufen schalten "Versatz nach Abstand" an) --
+-- Voreinstellungen (ersetzen Grundwerte und Regeln, die Schalter bleiben; die Filmisch-Stufen schalten "Versatz nach Abstand" an
+-- und setzen die Zoomdauer auf 1,5 s; Classic und Wide in combat lassen die Zoomdauer, wie sie ist) --
 -- Die drei Filmisch-Stufen teilen sich den Aufbau, v traegt nur die Unterschiede. Regeln in dieser Reihenfolge (erste gewinnt):
 -- Gespraech, Fliegen, Reiten, Instanz, Kampf, Drinnen, Erholen. Reiten/Fliegen/Instanz/Drinnen legen den Versatz ab (die Figur soll
 -- dort mittig sein), im Kampf und in Instanzen schaut die Kamera auf Gegner (Calm: nie).
@@ -477,6 +494,7 @@ local function filmic(v)
     return {
         enabled = true,
         offsetByDistance = true,
+        zoomSeconds = 1.5, -- Filmisch: laengerer Zoom (der allgemeine Standard bleibt 0,6 s)
         base = { cvars = base },
         rules = {
             { state = "npc", cvars = { test_cameraTargetFocusInteractStrengthYaw = 1 }, zoom = v.npcZoom },
@@ -531,7 +549,7 @@ end
 function Camera.ApplyPreset(id)
     local preset = Camera.PRESETS[id]
     if not preset then return nil, "CAM_PRESET_UNKNOWN" end
-    return Camera.SetMany({ enabled = preset.enabled, base = preset.base, rules = preset.rules, offsetByDistance = preset.offsetByDistance })
+    return Camera.SetMany({ enabled = preset.enabled, base = preset.base, rules = preset.rules, offsetByDistance = preset.offsetByDistance, zoomSeconds = preset.zoomSeconds })
 end
 
 -- Modul + Ereignisse ------------------------------------------------------------------------------
@@ -558,9 +576,11 @@ ns.RegisterModule("camera", {
         active = false
         syncStateNeeds(nil)
         Camera.Offset.Sync(nil)
+        Camera.Focus.Stop()
         Camera.Zoom.Release()
         setPopupSuppressed(false)
         CVars.RestoreAll()
+        Camera.Zoom.Resync()
     end,
 })
 
@@ -604,6 +624,7 @@ end)
 
 Compat.TryOn("PLAYER_LOGOUT", function()
     Camera.Offset.Sync(nil)
+    Camera.Focus.Stop()
     Camera.Zoom.Logout() -- unabhaengig von active: eine laufende Fahrt darf cameraZoomSpeed nicht verstellt zuruecklassen
     if active then
         setPopupSuppressed(false)
@@ -707,6 +728,14 @@ local function printDebug()
     end
     local count = CVars.External()
     ns.Print(L.CAM_DEBUG_EXTERNAL, count)
+    local trace = Camera.Zoom.Trace()
+    if #trace > 0 then
+        ns.Print(L.CAM_DEBUG_ZOOMLOG, #trace)
+        for _, e in ipairs(trace) do
+            local function num(v) return v ~= nil and ("%.2f"):format(v) or "-" end
+            ns.Print(L.CAM_DEBUG_ZOOMLINE, e.t, e.ev, num(e.pos), num(e.dest), num(e.speed))
+        end
+    end
 end
 
 local function setEnabled(on)

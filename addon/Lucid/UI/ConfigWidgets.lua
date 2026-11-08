@@ -390,6 +390,8 @@ function W.Dropdown(parent, width, onSelect, placeholder)
         self.options = options or {}
         if self.usesMenu then
             self:SetupMenu(function(_, root)
+                -- lange Listen (Verzierungs-Stile samt Zonen-Motiven): Menue scrollt statt ueber den Bildschirm zu ragen
+                if #self.options > 16 and type(root.SetScrollMode) == "function" then pcall(root.SetScrollMode, root, 16 * 20) end
                 for _, o in ipairs(self.options) do
                     local value = o.value
                     local desc = root:CreateRadio(o.text,
