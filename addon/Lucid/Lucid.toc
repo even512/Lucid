@@ -26,6 +26,7 @@ modules\Hide\Elements.lua
 modules\Hide\InkDock.lua
 modules\Hide\Presets.lua
 modules\Chat\Glass.lua
+modules\Chat\Font.lua
 modules\Minimap\Frames.lua
 FrameBorder.lua
 modules\Minimap\Shape.lua

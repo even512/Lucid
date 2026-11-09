@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.2.0
+
+### Chat readability
+- New "Readability" options in the Chat tab: text outline (none, thin, thick) and a stronger text shadow. They work on every chat
+  window, including new and whisper windows and after changing the font size, independent of the glass look and message
+  fading. Font and size stay as they are; turning them off restores the previous text exactly.
+- `/lucid chat outline none|thin|thick`, `/lucid chat shadow on|off`.
+
+### Hide other addons
+- New group "Addons" in the Hide tab: RestedXP guide and RestedXP arrow, Details! meter (all windows, also ones you open
+  later), VuhDo (also panels that appear when your group changes), Grid2, Cell and HealBot. Lucid only changes their
+  opacity (and lets clicks through outside combat), never shows, hides or moves them. Rows of addons you do not use are
+  greyed out ("... missing"). They are off by default and presets leave them alone.
+
+### Cooldown Manager
+- Blizzard's Cooldown Manager can be hidden like the action bars: four separate entries (essential, utility, buff icons,
+  buff bars) in the Action bars group. Lucid keeps its value when Blizzard applies the Edit Mode opacity. The Immersion and
+  Balanced presets treat them like the action bars.
+
+### Debuff condition
+- New condition "Debuff on you": shows a frame while a harmful effect is on you, also out of combat (for example a Faerie
+  Fire). Deserter, Resurrection Sickness and Exhaustion do not count. While the game locks aura data in combat, the last
+  value is kept. The Immersion and Balanced presets now show the debuff bar with it (apply the preset again).
+- The Hide tab list scrolls (mouse wheel or the buttons below it).
+
 ## 1.1.0
 
 ### Zone ornaments that match the zone

@@ -2,6 +2,9 @@
 -- Lucid-Fehler), rechts die Einstellungen des gewaehlten Elements (Basis-Alpha, Bedingungen, Blenden,
 -- Verzoegerung, Klicks durchlassen) und oben "Preset uebernehmen" mit Rueckfrage. Jede Aenderung geht ueber
 -- Elements.Set/SetEnabled bzw. Presets.Apply und wirkt sofort.
+-- Die Liste blaettert (Mausrad und senkrechter Scrollbalken rechts daneben, synchron; der Balken erscheint nur, wenn die
+-- Liste ueberlaeuft), seit die Gruppen Cooldown-Manager und Addons nicht mehr in die Hoehe passen. Zeilen-Beschriftungen
+-- bleiben einzeilig (abgeschnitten statt umgebrochen).
 local _, ns = ...
 local Elements, Presets, Fader, Store, State = ns.Elements, ns.Presets, ns.Fader, ns.Store, ns.State
 local Config, W = ns.Config, ns.Widgets
@@ -16,7 +19,19 @@ local ROW_H = 16
 local LIST_W = 250
 local TOP = -76          -- Oberkante von Liste und Detail (darueber: Preset-Zeile und Zeile "Fuer alle Elemente")
 
-local P = { selected = nil, condOffset = 0 }
+local LIST_H = 436
+local LIST_VIEW = LIST_H - 12 -- sichtbarer Bereich der Liste
+local SCROLL_W = 16           -- Breite des Scrollbalkens (rechts neben der Liste, im Abstand zum Detail-Bereich)
+
+-- Tooltip-Zusatz je Element (Hinweis auf eigene Blenden des Addons/Blizzards bzw. den Ink-&-Embers-Zettel)
+local EXTRA_TIP = {
+    tracker = "UI_EL_INKDOCK_TIP", questietracker = "UI_EL_INKDOCK_TIP",
+    details = "UI_EL_SELFFADE_TIP", vuhdo = "UI_EL_SELFFADE_TIP", rxpguide = "UI_EL_SELFFADE_TIP",
+    rxparrow = "UI_EL_SELFFADE_TIP",
+    cdessential = "UI_EL_CD_TIP", cdutility = "UI_EL_CD_TIP", cdbufficons = "UI_EL_CD_TIP", cdbuffbars = "UI_EL_CD_TIP",
+}
+
+local P = { selected = nil, condOffset = 0, listOffset = 0 }
 Hide.state = P
 
 local function pct(v) return ("%d %%"):format(math.floor(v * 100 + 0.5)) end
@@ -51,30 +66,140 @@ local function entryOf(id)
 end
 
 -- Liste --------------------------------------------------------------------------------------------
+-- page.slots: Gruppen-Ueberschriften und Element-Zeilen in Anzeige-Reihenfolge; layoutList zeigt ab P.listOffset so viele,
+-- wie in den sichtbaren Bereich passen, und versteckt den Rest (nur eigene Widgets).
+-- letzter Slot, der ab Versatz off in den sichtbaren Bereich passt (Positionen nur berechnet, nichts gesetzt)
+local function lastFitting(slots, off)
+    local y, last = -6, off
+    for i = off + 1, #slots do
+        local gap = (slots[i].header and i > off + 1) and 4 or 0
+        if -(y - gap - ROW_H) > LIST_VIEW then break end
+        y = y - gap - ROW_H
+        last = i
+    end
+    return last
+end
+
+-- kleinster Versatz, ab dem die Liste bis zum Ende sichtbar ist (0 = passt ganz)
+local function maxListOffset(slots)
+    for off = 0, #slots do
+        if lastFitting(slots, off) >= #slots then return off end
+    end
+    return 0
+end
+
+local function layoutList(page)
+    local slots = page.slots
+    local maxOffset = maxListOffset(slots)
+    if P.listOffset > maxOffset then P.listOffset = maxOffset end
+    if P.listOffset < 0 then P.listOffset = 0 end
+    local last = lastFitting(slots, P.listOffset)
+    local y = -6
+    for i, slot in ipairs(slots) do
+        local show = i > P.listOffset and i <= last
+        if show then
+            y = y - ((slot.header and i > P.listOffset + 1) and 4 or 0)
+            slot.widget:ClearAllPoints()
+            if slot.header then
+                slot.widget:SetPoint("TOPLEFT", 8, y - 3)
+            else
+                slot.widget:SetPoint("TOPLEFT", 4, y)
+            end
+            y = y - ROW_H
+            slot.widget:Show()
+        else
+            slot.widget:Hide()
+        end
+    end
+    page.listMore = last < #slots
+    -- Scrollbalken angleichen (still: der eigene OnValueChanged-Handler blaettert nicht erneut)
+    local bar = page.listBar
+    if bar then
+        page.listSyncing = true
+        bar:SetMinMaxValues(0, maxOffset)
+        bar:SetValue(P.listOffset)
+        page.listSyncing = false
+        if maxOffset > 0 then bar:Show(); bar:Enable() else bar:Hide(); bar:Disable() end
+        local up, down = bar.ScrollUpButton, bar.ScrollDownButton
+        if up and up.SetEnabled then up:SetEnabled(P.listOffset > 0) end
+        if down and down.SetEnabled then down:SetEnabled(P.listOffset < maxOffset) end
+    end
+end
+Hide.LayoutList = layoutList
+Hide.MaxListOffset = function(page) return maxListOffset(page.slots) end
+
+--- Liste blaettern (delta > 0: nach oben). Liefert true, wenn sich etwas bewegt hat.
+function Hide.ScrollList(page, delta)
+    local before = P.listOffset
+    P.listOffset = math.max(0, math.min(maxListOffset(page.slots), P.listOffset - delta))
+    layoutList(page)
+    return P.listOffset ~= before
+end
+
+-- Senkrechter Scrollbalken in Blizzard-Optik (UIPanelScrollBarTemplate: Balken mit Pfeil-Knoepfen, in Retail 12.x und
+-- Forever vorhanden); fehlt die Vorlage, ein schlichter senkrechter Slider. Nur eigener Frame, eigene Skripte.
+local function buildScrollBar(page, list)
+    local ok, bar = pcall(CreateFrame, "Slider", nil, list, "UIPanelScrollBarTemplate")
+    local templated = ok and type(bar) == "table"
+    if not templated then
+        bar = CreateFrame("Slider", nil, list)
+        bar:SetWidth(SCROLL_W)
+        local track = bar:CreateTexture(nil, "BACKGROUND")
+        track:SetColorTexture(1, 1, 1, 0.08)
+        track:SetAllPoints(bar)
+        bar:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+    end
+    bar:SetOrientation("VERTICAL")
+    -- Vorlage: Pfeil-Knoepfe sitzen ueber/unter dem Balken => Balken um ihre Hoehe einruecken
+    local inset = templated and 16 or 0
+    bar:SetPoint("TOPLEFT", list, "TOPRIGHT", 2, -inset)
+    bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", 2, inset)
+    bar:SetMinMaxValues(0, 0)
+    bar:SetValueStep(1)
+    if bar.SetObeyStepCount then bar:SetObeyStepCount(true) end
+    bar.scrollStep = 1 -- Pfeil-Knoepfe der Vorlage: eine Zeile je Klick
+    bar:SetScript("OnValueChanged", function(_, v)
+        if page.listSyncing then return end
+        local off = math.floor((tonumber(v) or 0) + 0.5)
+        if off ~= P.listOffset then
+            P.listOffset = off
+            layoutList(page)
+        end
+    end)
+    if bar.EnableMouseWheel then bar:EnableMouseWheel(true) end
+    bar:SetScript("OnMouseWheel", function(_, delta) Hide.ScrollList(page, delta > 0 and 2 or -2) end)
+    W.Tooltip(bar, function() return L.UI_EL_LIST_SCROLL_TIP end)
+    page.listBar = bar
+end
+
 local function buildList(page)
     local list = CreateFrame("Frame", nil, page)
     list:SetPoint("TOPLEFT", 0, TOP)
-    list:SetSize(LIST_W, 436)
+    list:SetSize(LIST_W, LIST_H)
     W.Fill(list, C.panel)
+    list:EnableMouseWheel(true)
+    list:SetScript("OnMouseWheel", function(_, delta) Hide.ScrollList(page, delta > 0 and 2 or -2) end)
     page.rows = {}
-    local y = -6
+    page.slots = {}
     for _, group in ipairs(Elements.GROUPS) do
         local h = W.Text(list, "GameFontNormalSmall", C.accent)
-        h:SetPoint("TOPLEFT", 8, y - 3)
         h:SetText(L["GROUP_" .. group])
-        y = y - ROW_H
+        page.slots[#page.slots + 1] = { header = true, widget = h }
         for _, entry in ipairs(Elements.CATALOG) do
             if entry.group == group then
                 local id = entry.id
                 local row = W.FlatButton(list, LIST_W - 8, ROW_H, "GameFontHighlightSmall")
-                row:SetPoint("TOPLEFT", 4, y)
                 row.label:ClearAllPoints()
                 row.label:SetPoint("LEFT", 24, 0)
                 row.label:SetPoint("RIGHT", -76, 0)
                 row.label:SetText(Elements.Label(id))
+                if row.label.SetWordWrap then row.label:SetWordWrap(false) end -- einzeilig, zu Langes wird abgeschnitten
+                if row.label.SetJustifyH then row.label:SetJustifyH("LEFT") end
                 row.mark = W.Text(row, "GameFontNormalSmall", C.muted)
                 row.mark:SetPoint("RIGHT", -4, 0)
+                row.mark:SetWidth(72)
                 if row.mark.SetJustifyH then row.mark:SetJustifyH("RIGHT") end
+                if row.mark.SetWordWrap then row.mark:SetWordWrap(false) end
                 row.check = W.Check(row, "", function(on)
                     local res, code = Elements.SetEnabled(id, on)
                     if res == nil then fail(page, code, id) end
@@ -92,19 +217,22 @@ local function buildList(page)
                 W.Tooltip(row, function()
                     local e = entryOf(id)
                     local _, _, tip = marker(e)
-                    if id == "tracker" or id == "questietracker" then
-                        tip = tip and (tip .. "\n" .. L.UI_EL_INKDOCK_TIP) or L.UI_EL_INKDOCK_TIP
-                    end
-                    return Elements.Label(id), tip
+                    local extra = EXTRA_TIP[id] and L[EXTRA_TIP[id]]
+                    if extra then tip = tip and (tip .. "\n" .. extra) or extra end
+                    -- Tooltip: voller Name, wo die Zeile eine Kurzform zeigt (L liefert fuer fehlende Schluessel den Schluessel)
+                    local full = L["ELEMENT_TIP_" .. id]
+                    if full == "ELEMENT_TIP_" .. id then full = Elements.Label(id) end
+                    return full, tip
                 end)
                 row.id = id
                 page.rows[id] = row
-                y = y - ROW_H
+                page.slots[#page.slots + 1] = { widget = row }
             end
         end
-        y = y - 4
     end
+    buildScrollBar(page, list)
     page.list = list
+    layoutList(page)
 end
 
 local function refreshList(page)
@@ -119,6 +247,7 @@ local function refreshList(page)
             W.Color(row.label, e.status == "missing" and C.disabled or C.text)
         end
     end
+    layoutList(page)
 end
 
 -- Bedingungen --------------------------------------------------------------------------------------

@@ -12,6 +12,15 @@
 -- Blizzard-Frames nur Alpha (und bei "Klicks durchlassen" ausserhalb des Kampfs die Maus), nie Show/Hide,
 -- Position, Groesse oder Parent. Einzige Ausnahme: die (ungeschuetzte) Minimap wird bei Alpha 0 ganz versteckt
 -- (MinimapExtras), weil die Engine Spielerpfeil und Questgebiete unabhaengig vom Alpha zeichnet.
+--
+-- Optionale Elemente (optional = true): Fremd-Addons (Questie, Gruppe "addons") und Blizzard-Teile, die nicht jeder Client
+-- hat (Cooldown-Manager). Fehlen sie, gibt es keine Chat-Meldung, nur den Hinweis im Reiter ("<Addon> fehlt", mit addon =
+-- Ordnername); Nachsuche bei ADDON_LOADED, alle 5 s (bis 24x) und beim Oeffnen des Reiters. Mehrfach-Elemente (multi = true,
+-- genau eine Alternative): das Addon erzeugt Instanzen nachtraeglich (Details-Fenster 2+, VuhDo-Panels erst bei Bedarf). Ein
+-- schon gefundenes Mehrfach-Element nimmt neu erschienene Frames seiner Liste nachtraeglich auf (Resolve/ResolveOptional,
+-- zusaetzlich bei GROUP_ROSTER_UPDATE); angemeldet werden sie per Fader.AddFrames (nur Alpha, Maus nur ausserhalb des Kampfs).
+-- Fremd-Frames fasst Lucid genauso an wie Blizzard-Frames: nur Alpha (und bei "Klicks durchlassen" ausserhalb des Kampfs die
+-- Maus), nie Show/Hide/Position. Presets setzen die Gruppe "addons" nicht (siehe Presets.lua).
 local _, ns = ...
 local Fader, Store, Compat = ns.Fader, ns.Store, ns.Compat
 local L = ns.L
@@ -26,7 +35,20 @@ Elements.DEFAULTS = {
     conditions = { { state = "combat", alpha = 1 }, { state = "target", alpha = 1 }, { state = "mouseover", alpha = 1 } },
 }
 
-Elements.GROUPS = { "bars", "units", "misc" }
+Elements.GROUPS = { "bars", "units", "misc", "addons" }
+
+-- Namensliste je Nummer 1..n (mehrere Muster: { "A%d", "B%d" } => A1, B1, A2, B2, ...)
+local function numbered(patterns, n)
+    local out = {}
+    for i = 1, n do
+        for _, p in ipairs(patterns) do out[#out + 1] = p:format(i) end
+    end
+    return out
+end
+
+-- Cooldown-Manager (Blizzard_CooldownViewer): Blizzard zeigt/versteckt die Viewer selbst und setzt ihr Alpha ueber die
+-- Deckkraft-Einstellung des Bearbeitungsmodus (UpdateSystemSettingOpacity) => verify.
+local CD_VERIFY = { methods = { "Show", "SetShown", "UpdateShownState", "UpdateSystemSettingOpacity" } }
 
 -- Katalog. Namen: zuerst Retail 12.x / Forever (12.1-Basis), dann aeltere Schreibweisen als Fallback.
 -- noReapply: fuer Frames, die ihr Alpha selbst blenden (derzeit keiner bekannt, Handtest beobachtet das).
@@ -47,6 +69,11 @@ Elements.CATALOG = {
     { id = "possessbar", group = "bars", names = { "PossessActionBar", "PossessBarFrame" } },
     { id = "micromenu", group = "bars", names = { "MicroMenuContainer", "MicroMenu", "MicroButtonAndBagsBar" } },
     { id = "bags", group = "bars", names = { "BagsBar", "MicroButtonAndBagsBar" } },
+    -- Cooldown-Manager (Retail/Forever; optional: fehlt er, ist die Zeile ausgegraut, ohne Chat-Meldung)
+    { id = "cdessential", group = "bars", names = { "EssentialCooldownViewer" }, optional = true, verify = CD_VERIFY },
+    { id = "cdutility", group = "bars", names = { "UtilityCooldownViewer" }, optional = true, verify = CD_VERIFY },
+    { id = "cdbufficons", group = "bars", names = { "BuffIconCooldownViewer" }, optional = true, verify = CD_VERIFY },
+    { id = "cdbuffbars", group = "bars", names = { "BuffBarCooldownViewer" }, optional = true, verify = CD_VERIFY },
     -- Einheitenfenster (Ziel des Ziels gehoert zum Ziel, Ziel des Fokus zum Fokus)
     { id = "player", group = "units", names = { "PlayerFrame" } },
     { id = "target", group = "units", names = { { "TargetFrame", "TargetFrameToT" } } },
@@ -76,6 +103,23 @@ Elements.CATALOG = {
         methods = { "Show", "SetShown", "Layout", "UpdateShownState", "SetShownBar", "UpdateBarsShown", "UpdateBarVisibility" },
         globals = { "StatusTrackingBarManager" },
     } },
+    -- Fremd-Addons (Gruppe "addons", alle optional, Standard aus, von Presets unberuehrt). verify, wo das Addon Alpha/Show
+    -- selbst setzt: RestedXP (Show/SetShown, Pfeil und Leisten SetAlpha), Details (Interaktions-/Kontext-Alpha), VuhDo
+    -- (Panel-Alpha je Gruppe). VuhDo, Cell und HealBot sind geschuetzte Frames: nur SetAlpha, Maus nur ausserhalb des Kampfs.
+    { id = "rxpguide", group = "addons", names = { { "RXPFrame", "RXPItemFrame", "RXPTargetFrame" } }, optional = true,
+        addon = "RXPGuides", multi = true, verify = { methods = { "Show", "SetShown" } } },
+    { id = "rxparrow", group = "addons", names = { "RXPG_ARROW" }, optional = true, addon = "RXPGuides",
+        verify = { methods = { "Show", "SetShown" } } },
+    -- Details: je Fenster Basis-Frame + Zeilen-Frame (Geschwister, nicht Kind), Fenster 1..10, auch spaeter erzeugte
+    { id = "details", group = "addons", names = { numbered({ "DetailsBaseFrame%d", "DetailsRowFrame%d" }, 10) },
+        optional = true, addon = "Details", multi = true, verify = { methods = { "Show", "SetShown" } } },
+    -- VuhDo: Panels Vd1..Vd10, erst bei Bedarf erzeugt
+    { id = "vuhdo", group = "addons", names = { numbered({ "Vd%d" }, 10) }, optional = true, addon = "VuhDo", multi = true,
+        verify = { methods = { "Show", "SetShown" } } },
+    { id = "grid2", group = "addons", names = { "Grid2LayoutFrame" }, optional = true, addon = "Grid2" },
+    { id = "cell", group = "addons", names = { "CellMainFrame" }, optional = true, addon = "Cell" },
+    { id = "healbot", group = "addons", names = { numbered({ "f%d_HealBot_Action" }, 10) }, optional = true,
+        addon = "HealBot", multi = true },
 }
 
 Elements.BY_ID = {}
@@ -150,6 +194,35 @@ local function resolve(rec)
         if #frames > 0 then return frames, used end
     end
     return nil
+end
+
+-- Mehrfach-Element um neu erschienene Frames seiner Liste erweitern (siehe Kopf). Liefert true, wenn Frames hinzukamen.
+-- Ist das Element angemeldet, bekommt der Fader sie per AddFrames (dazu die verify-Hooks).
+local hookVerify -- unten definiert
+local function growMulti(rec)
+    local id = rec.entry.id
+    local frames, used = resolveAlternative(id, rec.entry.names[1])
+    local have = {}
+    for _, f in ipairs(rec.frames) do have[f] = true end
+    local new = {}
+    for i, f in ipairs(frames) do
+        if not have[f] then
+            new[#new + 1] = f
+            rec.frames[#rec.frames + 1] = f
+            rec.names[#rec.names + 1] = used[i]
+            claimed[f] = id
+            log("%s: %s (nachgemeldet)", id, used[i])
+        end
+    end
+    if #new == 0 then return false end
+    if rec.registered then
+        Fader.AddFrames(id, new)
+        local v = rec.entry.verify
+        if v then
+            for _, f in ipairs(new) do hookVerify(f, id, v.methods or {}) end
+        end
+    end
+    return true
 end
 
 -- Einstellungen ------------------------------------------------------------------------------------
@@ -246,7 +319,7 @@ local function verifySoon(id)
     end)
 end
 
-local function hookVerify(t, id, methods)
+function hookVerify(t, id, methods)
     if type(t) ~= "table" or not hooksecurefunc then return end
     local done = verifyHooked[t] or {}
     verifyHooked[t] = done
@@ -337,6 +410,8 @@ function Elements.Resolve()
                 log("%s: %s%s", entry.id, table.concat(used, ", "), was == "missing" and " (spaet)" or "")
                 fresh[rec] = true
             end
+        elseif entry.multi then
+            growMulti(rec)
         end
     end
     -- Verschachtelung bestimmen, bevor angemeldet wird (ein spaet gefundenes Element kann Eltern eines anderen
@@ -383,15 +458,22 @@ local function scheduleOptional()
 end
 
 --- Optionale Elemente nachsuchen, falls ihr Frame inzwischen existiert (nil-Pruefung, billig)
+--- Mehrfach-Elemente: auch, wenn ein noch keinem Element gehoerender Frame ihrer Liste erschienen ist.
 function Elements.ResolveOptional()
     if not enabled then return end
     for _, entry in ipairs(Elements.CATALOG) do
-        if entry.optional and not recs[entry.id].frames then
+        local rec = recs[entry.id]
+        if entry.optional and not rec.frames then
             for _, alt in ipairs(entry.names) do
                 local list = type(alt) == "table" and alt or { alt }
                 for _, name in ipairs(list) do
                     if lookup(name) then return Elements.Resolve() end
                 end
+            end
+        elseif entry.multi and rec.frames then
+            for _, name in ipairs(entry.names[1]) do
+                local f = lookup(name)
+                if f and claimed[f] == nil then return Elements.Resolve() end
             end
         end
     end
@@ -402,16 +484,16 @@ local function markMissing()
     local missing = {}
     for _, entry in ipairs(Elements.CATALOG) do
         local rec = recs[entry.id]
+        local tried = {}
+        for _, alt in ipairs(entry.names) do
+            tried[#tried + 1] = type(alt) == "table" and table.concat(alt, "+") or alt
+        end
         if rec.status == "pending" and entry.optional then
             rec.status = "missing" -- optionale Elemente (Fremd-Addon): still, ohne Chat-Meldung; Nachsuche bleibt aktiv
-            log("%s: nicht vorhanden (optional, gesucht: %s)", entry.id, table.concat(entry.names, " / "))
+            log("%s: nicht vorhanden (optional, gesucht: %s)", entry.id, table.concat(tried, " / "))
         elseif rec.status == "pending" then
             rec.status = "missing"
             missing[#missing + 1] = entry.id
-            local tried = {}
-            for _, alt in ipairs(entry.names) do
-                tried[#tried + 1] = type(alt) == "table" and table.concat(alt, "+") or alt
-            end
             log("%s: nicht vorhanden (gesucht: %s)", entry.id, table.concat(tried, " / "))
         end
     end
@@ -528,7 +610,10 @@ ns.RegisterModule("hide", {
 ns.On("ADDON_LOADED", function(_, name)
     if enabled then
         Elements.Resolve()
-        if name == "Questie" then optionalTries = 0 end
+        -- ein optionales Fremd-Addon ist geladen: Nachsuche neu starten (es legt seine Frames ggf. erst spaeter an)
+        for _, entry in ipairs(Elements.CATALOG) do
+            if entry.addon ~= nil and entry.addon == name then optionalTries = 0 break end
+        end
         scheduleOptional()
     end
 end)
@@ -542,6 +627,31 @@ ns.On("PLAYER_ENTERING_WORLD", function()
     end
     scheduleOptional()
 end)
+
+-- Gruppenwechsel: Heil-Addons erzeugen Panels erst jetzt (VuhDo), neue Instanzen nachmelden (billig). Manche Addons legen
+-- ihre Frames erst nach dem Event (bzw. nach Kampfende) an: einmal verzoegert nachsuchen (entprellt), nur wenn ein
+-- Mehrfach-Element gerade angemeldet ist.
+Elements.MULTI_DELAY = 2
+local multiQueued = false
+local function multiActive()
+    for _, entry in ipairs(Elements.CATALOG) do
+        if entry.multi and recs[entry.id].registered then return true end
+    end
+    return false
+end
+local function resolveMultiLater()
+    if multiQueued or not enabled or not multiActive() or not (C_Timer and C_Timer.After) then return end
+    multiQueued = true
+    C_Timer.After(Elements.MULTI_DELAY, function()
+        multiQueued = false
+        Elements.ResolveOptional()
+    end)
+end
+Compat.TryOn("GROUP_ROSTER_UPDATE", function()
+    Elements.ResolveOptional()
+    resolveMultiLater()
+end)
+Compat.TryOn("PLAYER_REGEN_ENABLED", resolveMultiLater)
 
 -- Profilwechsel/-import/-reset: Fader hat angemeldete Elemente schon aufgefrischt; hier an-/abmelden
 Store.RegisterCallback(function()

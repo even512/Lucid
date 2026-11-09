@@ -10,6 +10,8 @@
 --               oder offener Eingabe wird das Fading ausgesetzt (der Verlauf ist voll sichtbar), danach laufen die
 --               Zeiten neu an. Abschalten stellt die vorherigen Werte je Fenster exakt wieder her.
 -- Beide sind getrennt schaltbar (Profil-Abschnitt "chat"), Standard nach Installation: beides aus.
+-- Kontrast  Kontur (outline none|thin|thick) und Schatten (shadow) der Chat-Schrift, unabhaengig von Glass und Fade, im
+--           selben Profil-Abschnitt; umgesetzt in modules/Chat/Font.lua (Glass.Apply ruft ChatFont.Apply mit auf).
 --
 -- Taint: Chat-Frames sind nicht geschuetzt; trotzdem aendert Lucid nur Alpha (ueber den Fader) und die Fading-
 -- Werte der Message-Frames. Achtung: SetFading/SetTimeVisible/SetFadeDuration auf Retail-Chatfenstern (Lua-Mixin)
@@ -33,7 +35,8 @@ local Glass = {}
 ns.Glass = Glass
 
 Glass.ID = "chat"              -- Fader-Element der Chat-Optik und Mouseover-Kennung des Chatbereichs
-Glass.DEFAULTS = { glass = false, fade = false, time = 20, fadeDuration = 3, delay = 1 }
+Glass.DEFAULTS = { glass = false, fade = false, time = 20, fadeDuration = 3, delay = 1, outline = "none", shadow = false }
+Glass.OUTLINES = { none = true, thin = true, thick = true } -- erlaubte Werte fuer "outline" (Chat-Kontrast, Font.lua)
 Glass.TIME_MIN, Glass.TIME_MAX = 1, 600      -- Sekunden, die eine Nachricht sichtbar bleibt
 Glass.FADE_DURATION_MAX = 10                 -- Sekunden fuer das Ausblenden einer Nachricht
 Glass.FADE_IN, Glass.FADE_OUT = 0.2, 0.5     -- Blende der Chat-Optik (volle Strecke)
@@ -77,8 +80,10 @@ function Glass.Validate(v)
     if type(v) ~= "table" then return nil, "type" end
     local out = {}
     for k, x in pairs(v) do
-        if k == "glass" or k == "fade" then
+        if k == "glass" or k == "fade" or k == "shadow" then
             if type(x) ~= "boolean" then return nil, k end
+        elseif k == "outline" then
+            if type(x) ~= "string" or not Glass.OUTLINES[x] then return nil, k end
         elseif k == "time" then
             if not isNum(x, Glass.TIME_MIN, Glass.TIME_MAX) then return nil, k end
         elseif k == "fadeDuration" then
@@ -159,6 +164,9 @@ local function windowNames()
     end
     return names
 end
+
+--- Namen aller Chat-Fenster (ChatFrame1..N und CHAT_FRAMES inkl. temporaerer), auch fuer den Chat-Kontrast (Font.lua)
+Glass.WindowNames = windowNames
 
 local function editBoxOf(name, f)
     return region(f.editBox) or region(_G[name .. "EditBox"])
@@ -355,7 +363,12 @@ function Glass.Apply()
     -- Mouseover des Chatbereichs: nach dem Fader, weil Fader.Unregister die Beobachtung beendet
     if active then State.WatchMouseover(Glass.ID, area) else State.UnwatchMouseover(Glass.ID) end
     updateFading()
+    -- Chat-Kontrast (Kontur/Schatten) mit denselben Ausloesern (neue Fenster, Profilwechsel, Modul an/aus)
+    if ns.ChatFont then xpcall(ns.ChatFont.Apply, geterrorhandler(), enabled) end
 end
+
+--- true, solange das Chat-Modul aktiv ist
+function Glass.IsEnabled() return enabled end
 
 --- true, wenn die Optik gerade ueber den Fader gesteuert wird
 function Glass.IsGlassActive() return registered end
@@ -417,6 +430,7 @@ local ON_OFF = { on = true, an = true, ["1"] = true, off = false, aus = false, [
 local function printStatus()
     local cfg = Glass.GetConfig()
     ns.Print(L.CHAT_STATUS, cfg.glass and L.CHAT_ON or L.CHAT_OFF, cfg.fade and L.CHAT_ON or L.CHAT_OFF, num(cfg.time))
+    ns.Print(L.CHAT_FONT_STATUS, L["CHAT_OUTLINE_" .. cfg.outline], cfg.shadow and L.CHAT_ON or L.CHAT_OFF)
 end
 
 ns.commands.chat = function(rest)
@@ -427,6 +441,30 @@ ns.commands.chat = function(rest)
         ns.Print(L.HELP_CHAT_GLASS)
         ns.Print(L.HELP_CHAT_FADE)
         ns.Print(L.HELP_CHAT_TIME)
+        ns.Print(L.HELP_CHAT_OUTLINE)
+        ns.Print(L.HELP_CHAT_SHADOW)
+        return
+    end
+    if sub == "outline" then
+        local mode = arg:lower()
+        if not Glass.OUTLINES[mode] or not Glass.Set("outline", mode) then
+            ns.Print(L.CHAT_OUTLINE_INVALID, safe(arg))
+            return
+        end
+        ns.Print(L.CHAT_OUTLINE_SET, L["CHAT_OUTLINE_" .. mode])
+        return
+    end
+    if sub == "shadow" then
+        local on = ON_OFF[arg:lower()]
+        if on == nil then
+            ns.Print(L.CHAT_ONOFF_INVALID, safe(arg))
+            return
+        end
+        if not Glass.Set("shadow", on) then
+            ns.Print(L.CHAT_VALUE_INVALID)
+            return
+        end
+        ns.Print(on and L.CHAT_SHADOW_ON or L.CHAT_SHADOW_OFF)
         return
     end
     if sub == "glass" or sub == "fade" then
@@ -458,9 +496,13 @@ ns.commands.chat = function(rest)
         ns.Print(L.HELP_CHAT_GLASS)
         ns.Print(L.HELP_CHAT_FADE)
         ns.Print(L.HELP_CHAT_TIME)
+        ns.Print(L.HELP_CHAT_OUTLINE)
+        ns.Print(L.HELP_CHAT_SHADOW)
     end
 end
 
 ns.AddHelp("HELP_CHAT_GLASS")
 ns.AddHelp("HELP_CHAT_FADE")
 ns.AddHelp("HELP_CHAT_TIME")
+ns.AddHelp("HELP_CHAT_OUTLINE")
+ns.AddHelp("HELP_CHAT_SHADOW")

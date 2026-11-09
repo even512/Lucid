@@ -1,5 +1,6 @@
 -- Reiter "Chat" (Spec 3.4/3.5): Glass-Optik an/aus, Nachrichten-Fade an/aus, Sichtbarkeitsdauer, Dauer des
--- Ausblendens, Verzoegerung der Optik. Alles ueber Glass.Set (geprueft wie beim Import), wirkt sofort.
+-- Ausblendens, Verzoegerung der Optik; rechts "Lesbarkeit": Kontur (keine/duenn/dick) und Schatten der Chat-Schrift
+-- (unabhaengig von Glass/Fade, modules/Chat/Font.lua). Alles ueber Glass.Set (geprueft wie beim Import), wirkt sofort.
 local _, ns = ...
 local Glass, Fader = ns.Glass, ns.Fader
 local Config, W = ns.Config, ns.Widgets
@@ -55,6 +56,24 @@ Config.RegisterPage("chat", {
         page.note:SetPoint("TOPLEFT", 4, -290)
         page.note:SetWidth(520)
         page.note:SetText(L.UI_CHAT_NOTE)
+        -- Lesbarkeit (rechte Spalte)
+        local head3 = W.Header(page, L.UI_CHAT_CONTRAST, 340)
+        head3:SetPoint("TOPLEFT", 420, -6)
+        local outlineLabel = W.Text(page, "GameFontNormalSmall", C.muted)
+        outlineLabel:SetPoint("TOPLEFT", 420, -32)
+        outlineLabel:SetText(L.UI_CHAT_OUTLINE)
+        page.outline = W.Dropdown(page, 160, setter(page, "outline"))
+        page.outline:SetPoint("TOPLEFT", 420, -48)
+        page.outline:SetOptions({
+            { value = "none", text = L.CHAT_OUTLINE_none },
+            { value = "thin", text = L.CHAT_OUTLINE_thin },
+            { value = "thick", text = L.CHAT_OUTLINE_thick },
+        })
+        W.Tooltip(page.outline, function() return L.UI_CHAT_OUTLINE, L.UI_CHAT_OUTLINE_TIP end)
+        page.shadow = W.Check(page, L.UI_CHAT_SHADOW, setter(page, "shadow"))
+        page.shadow:SetPoint("TOPLEFT", 416, -80)
+        W.Tooltip(page.shadow, function() return L.UI_CHAT_SHADOW, L.UI_CHAT_SHADOW_TIP end)
+
         page.status = W.Text(page, "GameFontHighlightSmall", C.muted)
         page.status:SetPoint("TOPLEFT", 4, -330)
         page.status:SetWidth(520)
@@ -67,6 +86,8 @@ Config.RegisterPage("chat", {
         page.delay:SetValue(cfg.delay)
         page.time:SetValue(cfg.time)
         page.duration:SetValue(cfg.fadeDuration)
+        page.outline:SetValue(cfg.outline)
+        page.shadow:SetValue(cfg.shadow)
         page.delay:SetActive(cfg.glass)
         page.time:SetActive(cfg.fade)
         page.duration:SetActive(cfg.fade)

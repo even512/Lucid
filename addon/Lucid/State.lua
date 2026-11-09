@@ -5,6 +5,10 @@
 --    solange ein Abnehmer den Zustand braucht: State.Need (Kamera-Regeln, mit Abmeldung) oder eine Abfrage per State.Get
 --    (Bedingungen anderer Module, bleibt bis zum Neuladen). State.GetQuiet fragt, ohne den Ticker anzufordern.
 -- Nicht verfuegbare Zustaende (API fehlt, Secret Value) gelten als "nicht erfuellt"; IsAvailable nennt den Grund.
+-- Ausnahme "debuffed" (Debuff auf dir): sind die Auren gerade Secret (Kampf, Encounter, M+, PvP), bleibt der letzte lesbare
+-- Wert stehen (im Kampf blendet ohnehin "Kampf" ein); nach Kampfende (PLAYER_REGEN_ENABLED) wird neu gelesen.
+-- "debuffed" wird erst gelesen, wenn ein Abnehmer danach fragt (State.Get/GetQuiet/GetReal oder State.Need, bleibt dann bis
+-- zum Neuladen aktiv); UNIT_AURA ist per RegisterUnitEvent nur fuer "player" angemeldet (Rueckfall: normales Event + Filter).
 -- Aenderungen gehen an Callbacks: fn(name, value, elementId) (elementId nur bei "mouseover").
 local _, ns = ...
 local Compat = ns.Compat
@@ -14,7 +18,7 @@ ns.State = State
 
 State.NAMES = {
     "combat", "target", "focus", "mouseover", "resting", "city", "group", "raid", "instance",
-    "mounted", "flying", "casting", "afk", "typing", "hurt", "power", "npc", "indoors", "swimming",
+    "mounted", "flying", "casting", "afk", "typing", "hurt", "power", "npc", "indoors", "swimming", "debuffed",
 }
 State.KNOWN = {}
 for _, n in ipairs(State.NAMES) do State.KNOWN[n] = true end
@@ -23,6 +27,7 @@ State.MOUSEOVER_INTERVAL = 0.1
 State.FLIGHT_INTERVAL = 0.25
 State.POLL_INTERVAL = 0.5
 State.POLLED = { indoors = true, swimming = true }
+State.ON_DEMAND = { debuffed = true } -- ereignisgetrieben, aber erst gelesen, wenn ein Abnehmer den Zustand braucht
 
 -- Hauptstaedte (uiMapID). "city" = Ruhezone innerhalb einer dieser Karten (inkl. Unterkarten).
 State.CAPITALS = {
@@ -70,6 +75,11 @@ end
 -- "power" heisst dort "nicht leer", sonst "nicht voll".
 State.POWER_REST_EMPTY = { [1] = true, [6] = true, [8] = true, [11] = true, [13] = true, [17] = true, [18] = true }
 
+-- "debuffed": schaedliche Effekte, die nicht zaehlen (fest, nicht konfigurierbar; nur per Quelle belegte IDs):
+-- 26013 Deserteur, 15007 Wiederbelebungsschwaeche, 57723 Erschoepfung. Ist die spellId Secret, zaehlt der Eintrag.
+State.DEBUFF_IGNORE = { [26013] = true, [15007] = true, [57723] = true }
+State.DEBUFF_MAX_INDEX = 40 -- Rueckfall GetDebuffDataByIndex: so viele Plaetze werden hoechstens gelesen
+
 -- Gestaltwandel, in denen geflogen werden kann (Reisegestalt, Fluggestalt)
 local FLIGHT_FORMS = { [3] = true, [27] = true, [29] = true }
 
@@ -94,10 +104,21 @@ end
 -- Nicht fuer "mouseover" (je Element). Das Fenster nimmt alle Overrides beim Schliessen zurueck.
 local overrides = {}  -- name -> true
 
+local demanded = {}   -- name -> true: Zustand aus ON_DEMAND wird gebraucht (siehe demand)
+local evaluate
+local function demand(name)
+    if State.ON_DEMAND[name] and not demanded[name] then
+        demanded[name] = true
+        if values[name] == nil then values[name] = false end -- Startwert "aus" ist keine Aenderung (kein Callback)
+        evaluate(name) -- frischer Startwert
+    end
+end
+
 --- true, wenn der Zustand erfuellt ist. Unbekannte oder nicht verfuegbare Zustaende: false.
 function State.Get(name, id)
     if name == "mouseover" then return id ~= nil and State.mouse[id] == true end
     if State.POLLED[name] then State.Touch(name) end -- erst die Abfrage durch einen Abnehmer startet den Ticker
+    demand(name)
     if overrides[name] then return true end
     if unavail[name] then return false end
     return values[name] == true
@@ -110,12 +131,19 @@ local function peek(name)
     return values[name] == true
 end
 --- wie Get, fordert aber keinen Ticker an (fuer Abnehmer, die ihren Bedarf mit State.Need melden)
-function State.GetQuiet(name) return peek(name) end
+function State.GetQuiet(name)
+    demand(name) -- kein Ticker, nur der erste Lesevorgang
+    return peek(name)
+end
+
+--- true, wenn ein bedarfsabhaengiger Zustand (ON_DEMAND) gelesen wird (Diagnose/Tests)
+function State.IsDemanded(name) return demanded[name] == true end
 
 --- echter Zustand ohne Simulation
 function State.GetReal(name, id)
     if name == "mouseover" then return State.Get(name, id) end
     if State.POLLED[name] then State.Touch(name) end
+    demand(name)
     if unavail[name] then return false end
     return values[name] == true
 end
@@ -123,6 +151,7 @@ end
 --- true oder false, Grund ("api" | "secret")
 function State.IsAvailable(name)
     if not State.KNOWN[name] then return false, "api" end
+    demand(name) -- ON_DEMAND: Verfuegbarkeit zeigt erst der erste Lesevorgang
     if unavail[name] then return false, unavail[name] end
     return true
 end
@@ -194,6 +223,61 @@ local function ratioState(kind)
 end
 
 local REGEN = { "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }
+
+-- Debuff auf dir --------------------------------------------------------------------------------------
+-- Jeder Zugriff auf Aura-Daten laeuft in pcall (RequiresUnitAuraAccess: bei Einschraenkung Fehler statt nil); Secret
+-- Values werden nur mit Compat.IsSecret geprueft, nie verglichen. Die Nutzlast von UNIT_AURA wird nicht ausgewertet.
+local lastDebuffed = false
+
+-- true, wenn der Index laut C_Secrets gerade Secret waere (oder die Abfrage selbst nicht eindeutig ist)
+local function auraIndexSecret(index)
+    local CS = C_Secrets
+    if type(CS) ~= "table" or type(CS.ShouldUnitAuraIndexBeSecret) ~= "function" then return false end
+    local ok, v = pcall(CS.ShouldUnitAuraIndexBeSecret, "player", index, "HARMFUL")
+    if not ok or Compat.IsSecret(v) then return true end
+    return v == true
+end
+
+-- zaehlt dieser Eintrag (AuraData) als Debuff? Ausnahmeliste nur bei lesbarer spellId; Secret/unlesbar => zaehlt
+local function auraCounts(a)
+    if Compat.IsSecret(a) then return true end
+    if type(a) ~= "table" then return false end
+    local ok, sid = pcall(function() return a.spellId end)
+    if not ok or Compat.IsSecret(sid) or type(sid) ~= "number" then return true end
+    return not State.DEBUFF_IGNORE[sid]
+end
+
+-- true/false, oder nil + Grund ("api": keine Aura-API; "secret": gerade nicht lesbar)
+local function readDebuffs()
+    local UA = C_UnitAuras
+    local list = type(UA) == "table" and type(UA.GetUnitAuras) == "function"
+    local byIndex = type(UA) == "table" and type(UA.GetDebuffDataByIndex) == "function"
+    if not (list or byIndex) then return nil, "api" end
+    if auraIndexSecret(1) then return nil, "secret" end
+    if list then
+        local ok, auras = pcall(UA.GetUnitAuras, "player", "HARMFUL")
+        if not ok or Compat.IsSecret(auras) then return nil, "secret" end
+        if type(auras) == "table" then
+            local okL, found = pcall(function()
+                for _, a in ipairs(auras) do
+                    if auraCounts(a) then return true end
+                end
+                return false
+            end)
+            if not okL then return nil, "secret" end
+            return found
+        end
+        if not byIndex then return nil, "secret" end
+    end
+    for i = 1, State.DEBUFF_MAX_INDEX do
+        local ok, a = pcall(UA.GetDebuffDataByIndex, "player", i)
+        if not ok then return nil, "secret" end
+        if Compat.IsSecret(a) then return true end -- es gibt einen Eintrag, nur sein Inhalt ist gesperrt
+        if a == nil then return false end
+        if auraCounts(a) then return true end
+    end
+    return false
+end
 
 local defs = {
     combat = {
@@ -292,6 +376,19 @@ local defs = {
             return false
         end,
     },
+    -- Debuff auf dir (siehe readDebuffs): Secret => letzten Wert halten, keine API => nicht verfuegbar
+    debuffed = {
+        api = {}, events = { "UNIT_AURA", REGEN[2] },
+        read = function()
+            local v, reason = readDebuffs()
+            if v == nil then
+                if reason == "secret" then return lastDebuffed end
+                return nil, reason
+            end
+            lastDebuffed = v and true or false
+            return lastDebuffed
+        end,
+    },
     npc = {
         api = {}, events = {},
         read = function(event)
@@ -308,13 +405,11 @@ table.sort(defs.npc.events)
 -- Events, deren erstes Argument die Einheit ist (nur "player" zaehlt)
 local UNIT_ARG = {
     UNIT_HEALTH = true, UNIT_MAXHEALTH = true, UNIT_POWER_UPDATE = true, UNIT_MAXPOWER = true,
-    UNIT_DISPLAYPOWER = true, PLAYER_FLAGS_CHANGED = true,
+    UNIT_DISPLAYPOWER = true, PLAYER_FLAGS_CHANGED = true, UNIT_AURA = true,
     UNIT_SPELLCAST_START = true, UNIT_SPELLCAST_STOP = true, UNIT_SPELLCAST_FAILED = true,
     UNIT_SPELLCAST_INTERRUPTED = true, UNIT_SPELLCAST_CHANNEL_START = true, UNIT_SPELLCAST_CHANNEL_STOP = true,
     UNIT_SPELLCAST_EMPOWER_START = true, UNIT_SPELLCAST_EMPOWER_STOP = true,
 }
-
-local evaluate
 
 -- Fliegen: Ticker nur bei Anlass ------------------------------------------------------------------
 local flightTicker
@@ -364,6 +459,7 @@ end
 
 --- Abnehmer meldet Bedarf (on = true) bzw. gibt ihn zurueck (on = false/nil); gilt nur fuer indoors/swimming
 function State.Need(name, owner, on)
+    if on and State.ON_DEMAND[name] then demand(name) end
     if not State.POLLED[name] then return end
     needs[name] = needs[name] or {}
     local was = polled(name)
@@ -385,6 +481,7 @@ function State.IsSwimTickerActive() return State.IsPolling("swimming") end
 
 function evaluate(name, event, ...)
     local def = defs[name]
+    if State.ON_DEMAND[name] and not demanded[name] then return end
     if unavail[name] == "api" and def.static then return end
     local ok, v, reason = xpcall(def.read, geterrorhandler(), event, ...)
     if not ok then return end
@@ -398,9 +495,16 @@ end
 local eventStates = {} -- event -> { name... }
 
 local function dispatch(event, ...)
-    if UNIT_ARG[event] and (...) ~= "player" then return end
+    if UNIT_ARG[event] then
+        local unit = ...
+        if Compat.IsSecret(unit) or unit ~= "player" then return end
+    end
     for _, name in ipairs(eventStates[event]) do evaluate(name, event, ...) end
 end
+
+-- Einheiten-Events, die nur fuer "player" gebraucht werden: eigener Frame mit RegisterUnitEvent (der Client filtert)
+local UNIT_ONLY_PLAYER = { UNIT_AURA = true }
+local unitFrame
 
 local function registerEvent(event, name)
     if eventStates[event] then
@@ -408,6 +512,14 @@ local function registerEvent(event, name)
         return true
     end
     eventStates[event] = { name }
+    if UNIT_ONLY_PLAYER[event] and CreateFrame then
+        unitFrame = unitFrame or CreateFrame("Frame")
+        if type(unitFrame.RegisterUnitEvent) == "function"
+            and pcall(unitFrame.RegisterUnitEvent, unitFrame, event, "player") then
+            unitFrame:SetScript("OnEvent", function(_, e, ...) dispatch(e, ...) end) -- dispatch filtert zusaetzlich
+            return true
+        end
+    end
     if Compat.TryOn(event, dispatch) then return true end
     eventStates[event] = nil
     return false

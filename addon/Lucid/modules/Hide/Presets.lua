@@ -2,6 +2,8 @@
 -- Uebernehmen schreibt fuer jedes Katalog-Element eine vollstaendige Einstellung ins aktive Profil
 -- (vorherige Einstellungen dieser Elemente werden ersetzt, andere Abschnitte/Elemente bleiben). Danach ist
 -- alles frei anpassbar; Lucid merkt sich kein "aktives Preset".
+-- Ausnahme: Elemente der Gruppe "addons" (Fremd-Addons) setzt kein Preset, ihre Einstellung bleibt, wie der Nutzer sie
+-- gewaehlt hat. Der Cooldown-Manager (Gruppe "bars") folgt den Aktionsleisten des Presets.
 local _, ns = ...
 local Elements, Fader, Store = ns.Elements, ns.Fader, ns.Store
 local L = ns.L
@@ -11,6 +13,9 @@ ns.Presets = Presets
 
 Presets.ORDER = { "immersion", "balanced", "combat", "off" }
 -- Eingabe -> Preset (Englisch und Deutsch, ohne Gross-/Kleinschreibung)
+-- Gruppen, die kein Preset anfasst (Fremd-Addons bleiben, wie der Nutzer sie eingestellt hat)
+Presets.SKIP_GROUPS = { addons = true }
+
 Presets.ALIASES = {
     immersion = "immersion",
     balanced = "balanced", ausgewogen = "balanced",
@@ -42,7 +47,9 @@ Presets.BUILDERS = {
         local id, group = entry.id, entry.group
         if id == "micromenu" or id == "statusbars" then return cfg(0, conds("mouseover"), 0.3, 0.8, 2, true) end
         if id == "bags" or id == "tracker" or id == "questietracker" then return cfg(0, conds("mouseover", "npc"), 0.3, 0.8, 2, true) end
-        if id == "buffs" or id == "debuffs" then return cfg(0, conds("combat", "mouseover"), 0.3, 0.8, 2, true) end
+        if id == "buffs" then return cfg(0, conds("combat", "mouseover"), 0.3, 0.8, 2, true) end
+        -- Debuff-Leiste zusaetzlich, solange ein Debuff auf dir liegt (auch ausserhalb des Kampfs)
+        if id == "debuffs" then return cfg(0, conds("combat", "mouseover", "debuffed"), 0.3, 0.8, 2, true) end
         -- Spielerrahmen bleibt zusaetzlich sichtbar, solange Leben fehlt (Bedingungen: Maximum)
         if id == "player" then return cfg(0, conds("combat", "target", "mouseover", "hurt"), 0.3, 0.8, 2, true) end
         if group == "bars" or group == "units" or id == "minimap" then
@@ -57,7 +64,8 @@ Presets.BUILDERS = {
         if id == "bags" then return cfg(0.3, conds("mouseover", "npc"), 0.25, 0.6, 1.5, false) end
         if id == "tracker" or id == "questietracker" then return cfg(0.7, conds("mouseover", "npc"), 0.25, 0.6, 1.5, false) end
         if id == "minimap" then return cfg(0.6, conds("mouseover"), 0.25, 0.6, 1.5, false) end
-        if id == "buffs" or id == "debuffs" then return cfg(0.5, conds("combat", "mouseover"), 0.25, 0.6, 1.5, false) end
+        if id == "buffs" then return cfg(0.5, conds("combat", "mouseover"), 0.25, 0.6, 1.5, false) end
+        if id == "debuffs" then return cfg(0.5, conds("combat", "mouseover", "debuffed"), 0.25, 0.6, 1.5, false) end
         if group == "units" then
             return cfg(0.5, conds("combat", "target", "mouseover", "hurt"), 0.25, 0.6, 1.5, false)
         end
@@ -86,12 +94,14 @@ function Presets.Resolve(name)
     return Presets.ALIASES[name:lower():match("^%s*(.-)%s*$")]
 end
 
---- Einstellungen aller Katalog-Elemente fuer ein Preset (frische Tabellen)
+--- Einstellungen aller Katalog-Elemente fuer ein Preset (frische Tabellen; ohne Presets.SKIP_GROUPS)
 function Presets.Build(key)
     local build = Presets.BUILDERS[key]
     if not build then return nil end
     local out = {}
-    for _, entry in ipairs(Elements.CATALOG) do out[entry.id] = build(entry) end
+    for _, entry in ipairs(Elements.CATALOG) do
+        if not Presets.SKIP_GROUPS[entry.group] then out[entry.id] = build(entry) end
+    end
     return out
 end
 

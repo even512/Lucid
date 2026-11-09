@@ -297,23 +297,36 @@ local function lockdown() return InCombatLockdown and InCombatLockdown() end
 -- opts.mouseExclude(frame) ausschliesst (z. B. weil sie einem anderen Element gehoeren), samt Kindern.
 -- Retail 12.x: jede Zustandsabfrage kann ein Secret Value liefern => nur ueber Compat.QueryBool (kein Wahrheitstest
 -- auf dem Rohwert); ist IsForbidden nicht eindeutig false, bleibt der Frame samt Unterbaum unberuehrt.
+-- Breitensuche: erst alle Element-Frames (Wurzeln), dann deren Kinder Ebene fuer Ebene. So kommt bei vielen Kindern
+-- (Heil-Addons, Details) keine spaetere Wurzel (z. B. Vd2) hinter dem Limit MOUSE_MAX zu kurz; unter dem Limit ergibt sich
+-- dieselbe Menge wie bei der Tiefensuche (nur die Reihenfolge ist eine andere).
 local function mouseTargets(el)
     if not el.mouseChildren then return el.frames end
     local out, seen = {}, {}
-    local function add(f, depth)
-        if type(f) ~= "table" or seen[f] or #out >= Fader.MOUSE_MAX then return end
-        seen[f] = true
-        if f.IsForbidden and Compat.QueryBool(f, "IsForbidden") ~= false then return end
-        if depth > 0 and el.mouseExclude and el.mouseExclude(f) then return end
-        out[#out + 1] = f
-        if depth < Fader.MOUSE_DEPTH and f.GetChildren then
-            local ok, kids = pcall(function() return { f:GetChildren() } end)
-            if ok then
-                for i = 1, #kids do add(kids[i], depth + 1) end
+    local queue, head = {}, 1
+    local cap = Fader.MOUSE_MAX * 8 -- Warteschlange begrenzen (riesige Kind-Listen)
+    for _, f in ipairs(el.frames) do queue[#queue + 1] = { f, 0 } end
+    while head <= #queue and #out < Fader.MOUSE_MAX do
+        local f, depth = queue[head][1], queue[head][2]
+        head = head + 1
+        if type(f) == "table" and not seen[f] then
+            seen[f] = true
+            local skip = (f.IsForbidden and Compat.QueryBool(f, "IsForbidden") ~= false)
+                or (depth > 0 and el.mouseExclude and el.mouseExclude(f))
+            if not skip then
+                out[#out + 1] = f
+                if depth < Fader.MOUSE_DEPTH and f.GetChildren then
+                    local ok, kids = pcall(function() return { f:GetChildren() } end)
+                    if ok then
+                        for i = 1, #kids do
+                            if #queue >= cap then break end
+                            queue[#queue + 1] = { kids[i], depth + 1 }
+                        end
+                    end
+                end
             end
         end
     end
-    for _, f in ipairs(el.frames) do add(f, 0) end
     return out
 end
 --- Frames, die "Klicks durchlassen" fuer dieses Element anfassen wuerde (Diagnose/Tests)
@@ -354,8 +367,10 @@ function updateMouse(el, forceOn)
     local want = not forceOn and el.active and el.cfg.clickThrough and el.cur <= EPS and not el.curveOn
         and not el.anim and not el.outAt and not editMode and not State.Get("combat")
     want = want and true or false
-    if want == el.mouseIsOff then
+    -- mouseRescan (Fader.AddFrames): Maus ist schon aus, neue Frames kamen hinzu => Abschalten fuer sie nachholen
+    if want == el.mouseIsOff and not (want and el.mouseRescan) then
         el.mousePending = false
+        el.mouseRescan = nil
         return
     end
     if lockdown() then
@@ -385,6 +400,7 @@ function updateMouse(el, forceOn)
         end
     end
     el.mouseIsOff = want
+    el.mouseRescan = nil
     if firstErr then geterrorhandler()(firstErr) end
 end
 
@@ -572,6 +588,22 @@ local function configure(el)
     return wasActive
 end
 
+-- Frame an ein Element haengen: Ausgangs-Alpha merken, Besitzer eintragen, Nachher-Hooks (einmal je Frame)
+local function attach(el, f)
+    el.frames[#el.frames + 1] = f
+    local a = f:GetAlpha()
+    el.origs[f] = Compat.IsSecret(a) and 1 or clamp(a, 0, 1, 1)
+    owner[f] = el
+    if not hooked[f] and hooksecurefunc then
+        hooksecurefunc(f, "SetAlpha", onSetAlpha)
+        hooked[f] = true
+    end
+    -- SetAlphaFromBoolean (Retail 12.x) laeuft am SetAlpha-Hook vorbei
+    if not hookedBool[f] and hooksecurefunc and type(f.SetAlphaFromBoolean) == "function" then
+        if pcall(hooksecurefunc, f, "SetAlphaFromBoolean", onSetAlphaFromBoolean) then hookedBool[f] = true end
+    end
+end
+
 --- Element anmelden. frames: Frame oder Liste von Frames. defaults: Element-Standardwerte (siehe oben).
 --- opts.noReapply: Alpha-Ruecksetzungen durch Blizzard nicht korrigieren (fuer Frames, die selbst blenden).
 --- opts.mouseChildren: "Klicks durchlassen" erfasst auch Kind-Frames (Knoepfe einer Leiste).
@@ -601,20 +633,7 @@ function Fader.Register(id, frames, defaults, opts)
         curveAt = {}, curveOn = false, -- Kurvenmodus: frame -> H; mindestens ein Frame im Kurvenmodus
     }
     for _, f in ipairs(frames) do
-        if type(f) == "table" and f.SetAlpha and f.GetAlpha then
-            el.frames[#el.frames + 1] = f
-            local a = f:GetAlpha()
-            el.origs[f] = Compat.IsSecret(a) and 1 or clamp(a, 0, 1, 1)
-            owner[f] = el
-            if not hooked[f] and hooksecurefunc then
-                hooksecurefunc(f, "SetAlpha", onSetAlpha)
-                hooked[f] = true
-            end
-            -- SetAlphaFromBoolean (Retail 12.x) laeuft am SetAlpha-Hook vorbei
-            if not hookedBool[f] and hooksecurefunc and type(f.SetAlphaFromBoolean) == "function" then
-                if pcall(hooksecurefunc, f, "SetAlphaFromBoolean", onSetAlphaFromBoolean) then hookedBool[f] = true end
-            end
-        end
+        if type(f) == "table" and f.SetAlpha and f.GetAlpha then attach(el, f) end
     end
     assert(#el.frames > 0, "Lucid: Element ohne gueltige Frames: " .. id)
     local a0 = el.frames[1]:GetAlpha()
@@ -625,6 +644,31 @@ function Fader.Register(id, frames, defaults, opts)
     retarget(el, true)
     updateVerifyTicker()
     return el
+end
+
+--- weitere Frames an ein angemeldetes Element haengen (spaet erzeugte Instanzen, z. B. ein zweites Details-Fenster oder
+--- ein VuhDo-Panel, das erst bei Gruppenwechsel entsteht). Die neuen Frames bekommen sofort das aktuelle Alpha (nur
+--- SetAlpha, auch im Kampf erlaubt). Ist "Klicks durchlassen" gerade angewendet, wird ihre Maus ausserhalb des Kampfs
+--- sofort, sonst nach Kampfende abgeschaltet. Frames, die schon einem Element gehoeren, bleiben unberuehrt.
+--- Liefert die Zahl angehaengter Frames.
+function Fader.AddFrames(id, frames)
+    local el = elements[id]
+    if not el or type(frames) ~= "table" then return 0 end
+    if frames.GetAlpha then frames = { frames } end
+    local n = 0
+    for _, f in ipairs(frames) do
+        if type(f) == "table" and f.SetAlpha and f.GetAlpha and owner[f] == nil then
+            attach(el, f)
+            n = n + 1
+        end
+    end
+    if n == 0 then return 0 end
+    applyAlpha(el, el.cur)
+    if el.mouseIsOff then
+        el.mouseRescan = true -- updateMouse schaltet die Maus der neuen Frames ab (im Kampf: nach Kampfende)
+        updateMouse(el)
+    end
+    return n
 end
 
 --- Element abmelden: Alpha und Maus zurueck auf den Stand vor der Anmeldung (Maus ggf. nach Kampfende).
