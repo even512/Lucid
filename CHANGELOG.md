@@ -23,7 +23,11 @@
 - New condition "Debuff on you": shows a frame while a harmful effect is on you, also out of combat (for example a Faerie
   Fire). Deserter, Resurrection Sickness and Exhaustion do not count. While the game locks aura data in combat, the last
   value is kept. The Immersion and Balanced presets now show the debuff bar with it (apply the preset again).
-- The Hide tab list scrolls (mouse wheel or the buttons below it).
+
+### Hide tab
+- The element list got longer and now has a scroll bar (the mouse wheel works too).
+- Row labels stay on one line; long names are cut off instead of running into the next row. The Cooldown Manager rows use
+  short names, the tooltip shows the full name.
 
 ## 1.1.0
 
