@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.3.0
+
+### Immersive nameplate style (opt-in)
+- Lucid can now give Blizzard's nameplates a look that fits the world instead of an overlay: a slim bar in a dark bronze
+  frame with a living liquid fill, ember colours by stance (hostile, neutral, friendly), a calm own name font with a soft ink
+  veil, and a warm glow under your target. It is off by default; with it off the nameplates look exactly like Blizzard's.
+- Level and rank: the level sits in a small bronze plaque, elite gets a bronze dragon, rare a silver dragon, bosses a skull.
+- Quest objectives: enemies that belong to an active quest show a bag (collect), crossed swords (kill) or a gauntlet
+  (interact) next to the bar. With Questie loaded Lucid asks its public API (read only) and hides Questie's own icon on the
+  nameplate; without Questie it falls back to a golden "!".
+- Bar on demand (only the name outside combat and at full health; your target always keeps its bar), peaceful creatures
+  show only a small pale name, and a low-health glimmer for the execute range (default below 20 %, 10 to 35 % adjustable).
+- Depth: distant nameplates get smaller and paler. New "All nameplates the same size" switch and "Target size" (100 to 130 %)
+  replace Blizzard's 1.2x target enlargement and 80 % distance shrinking; depth takes precedence for the distance scaling.
+  All of it goes through the same safe CVar handling as the rest (values are restored when you turn it off or log out).
+- Styled cast bar: a thin glowing thread in its own bronze frame under the bar, with flowing magic, a spark at the leading
+  edge and a shield for spells that cannot be interrupted.
+- Three presets, "Subtle", "Immersive" and "Cinematic", switch the building blocks together (visibility and range are not
+  touched); every block can also be turned on or off on its own.
+- Nameplates tab: new view "Appearance" with a live preview (sample nameplate with sample states: stance, rank, quest, health,
+  cast, target, combat; click the preview for a dark or light background), all building blocks with tooltips, bar height,
+  font and size, ember threshold, depth values and the size options. The sample values change nothing in the game.
+- If Plater, Kui Nameplates, TidyPlates, Threat Plates, Platynator or ElvUI nameplates are loaded, the style stays off and
+  the tab says why; the visibility rules keep working.
+- Commands: `/lucid nameplates style on|off|dezent|immersiv|filmisch` (also `subtle|immersive|cinematic`), `style test` (try it
+  on your target), `style panel` (test window), `style rank|cast` (previews), `style debug|trace`.
+- Raid target marker: with the style on, the marker (skull, cross, ...) sits centred above the nameplate name; with the style
+  off Blizzard's position is restored.
+
+### Quest far view (opt-in)
+- Distant quest enemies whose nameplates would be invisible show only their quest symbol (bag, swords, gauntlet or "!"),
+  using the same rule as the quest objectives above. Off by default; own view "Quest far view" in the Nameplates tab with a
+  live preview (symbol size, opacity, pulse, halo) and `/lucid nameplates far on|off`.
+- Range depends on the client: Forever 20 to 45 yards, Retail 20 to 60 yards. A view-distance limit (radius) is kept through
+  Blizzard's distance opacity, so it still applies while the far view is on.
+- Invisible nameplates do not catch clicks. It needs Lucid's nameplate control and stays off if another nameplate addon is
+  loaded.
+- Test mode `/lucid nameplates far test [loot|slay|interact|!|mix|off]` shows the far view on all hostile enemies nearby for
+  the session (also a button in the tab and in the test window); `/lucid nameplates probe far|click` are diagnostic probes.
+
+### Copy window for diagnostics
+- The output of the probe and debug commands (for example `/lucid nameplates probe`, `style debug`) opens in a window with the
+  text selected, so you can copy it with Ctrl+C instead of scrolling the chat.
+
+### Minimap zone ornament
+- A golden zone ornament in the style of the zone card wraps the top and right of the rectangular 4:3 minimap and changes
+  with the zone: 43 zone motifs, with a ring around the sun/moon (day/night symbol). Zones without a motif stay plain.
+  A thin dark edge keeps it readable on bright ground.
+- Minimap tab, group "Zone ornament": switch, size, opacity, horizontal and vertical offset, and "Place over sun and moon".
+  The ornament fades with the minimap. `/lucid minimap ornament on|off|probe` (the probe shows motif, zone and sizes).
+
 ## 1.2.0
 
 ### Chat readability

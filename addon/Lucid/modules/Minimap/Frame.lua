@@ -40,6 +40,9 @@ function Frame.SetLevel(m)
     local okL, lvl = pcall(m.GetFrameLevel, m)
     lvl = okL and Compat.Num(lvl) or nil
     if lvl then pcall(frame.SetFrameLevel, frame, lvl) end
+    -- das Zonen-Ornament liegt immer ueber diesem Rahmen: Ebene mitziehen (egal, wer zuerst anwendet)
+    local O = MM.Ornament
+    if O and O.SetLevel then O.SetLevel(m) end
 end
 
 local function ensureFrame(m)

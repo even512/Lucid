@@ -8,6 +8,10 @@
 --   zonePos/clockPos/coordsPos (blizzard | top | bottom: Lucids Text im Rahmen),
 --   fontSize (8-24), bronze (bool: Schrift im Bronze-Ton).
 --   button (bool, Standard an) und buttonAngle (Grad 0-360, Standard 225): Lucids eigener Minimap-Knopf (Button.lua).
+--   ornament (bool, Standard aus), ornamentSize (50-200 %, Std 100), ornamentOffsetX/ornamentOffsetY (-40..40, Std 0;
+--   positiv = rechts bzw. oben), ornamentAlpha (30-100 %, Std 85): Zonen-Ornament (Ornament.lua, nur rect 4:3). Alter
+--   Bestand ohne die Felder bekommt die Standardwerte; das fruehere ornamentInset n (nach innen) wird zu offsetX = -n,
+--   offsetY = -n und faellt danach weg. ornamentTop (bool, Standard an): Ornament auch ueber Sonne/Mond (GameTimeFrame).
 -- Technik (Recherche zur Minimap):
 --  - Der Minimap-Frame bleibt quadratisch; eine Masken-TGA (Media/minimap-*.tga, erzeugt von
 --    scripts/gen-minimap-media.mjs) per Minimap:SetMaskTexture schneidet die Form aus. Rechteck = Maske schneidet ab,
@@ -27,7 +31,9 @@ ns.Minimap = MM
 
 MM.SHAPES = { "round", "square", "rect" }
 MM.RATIOS = { "3:2", "4:3", "16:9", "2:3", "3:4" }
-MM.LIMITS = { scale = { 50, 200 }, borderSize = { 50, 200 }, fontSize = { 8, 24 } }
+MM.LIMITS = { scale = { 50, 200 }, borderSize = { 50, 200 }, fontSize = { 8, 24 },
+    ornamentSize = { 50, 200 }, ornamentOffsetX = { -40, 40 }, ornamentOffsetY = { -40, 40 },
+    ornamentAlpha = { 30, 100 } }
 -- Elemente (M6)
 MM.ELEMENT_KEYS = { "zone", "clock", "coords", "calendar", "mail", "tracking", "difficulty", "expansion", "compartment", "zoom", "buttons" }
 MM.TEXT_ELEMENTS = { "zone", "clock", "coords" } -- Elemente mit eigener Lage (Lucids Text im Rahmen)
@@ -54,7 +60,9 @@ end
 
 function MM.Defaults()
     return { shape = "round", rectRatio = "3:2", scale = 100, border = "schmal", borderSize = 100, northMarker = false,
-        elements = MM.ElementDefaults(), button = true, buttonAngle = 225 }
+        elements = MM.ElementDefaults(), button = true, buttonAngle = 225,
+        ornament = false, ornamentSize = 100, ornamentOffsetX = 0, ornamentOffsetY = 0, ornamentAlpha = 85,
+        ornamentTop = true }
 end
 
 local VIS_SET, POS_SET, ELEMENT_SET = set(MM.VIS), set(MM.POS), set(MM.ELEMENT_KEYS)
@@ -100,6 +108,7 @@ end
 function MM.Validate(v)
     if type(v) ~= "table" then return nil, "type" end
     local def, out = MM.Defaults(), {}
+    local legacyInset -- frueheres ornamentInset (Migration)
     for k, x in pairs(v) do
         if k == "shape" then
             if type(x) ~= "string" or not SHAPE_SET[x] then return nil, k end
@@ -107,8 +116,9 @@ function MM.Validate(v)
         elseif k == "rectRatio" then
             if type(x) ~= "string" or not RATIO_SET[x] then return nil, k end
             out.rectRatio = x
-        elseif k == "scale" or k == "borderSize" then
-            -- Zahl Pflicht, auf 50-200 geklemmt und auf ganze Prozent gerundet
+        elseif k == "scale" or k == "borderSize" or k == "ornamentSize" or k == "ornamentOffsetX" or k == "ornamentOffsetY"
+            or k == "ornamentAlpha" then
+            -- Zahl Pflicht, auf die Grenzen aus MM.LIMITS geklemmt und auf ganze Werte gerundet
             if type(x) ~= "number" or x ~= x then return nil, k end
             local r = MM.LIMITS[k]
             out[k] = math.floor(math.min(r[2], math.max(r[1], x)) + 0.5)
@@ -119,6 +129,15 @@ function MM.Validate(v)
             local e, d = validateElements(x)
             if not e then return nil, "elements." .. tostring(d) end
             out.elements = e
+        elseif k == "ornamentInset" then
+            -- Migration: frueher ein Versatz nach innen (links + unten); ungueltige Altwerte fallen still weg
+            if type(x) == "number" and x == x then legacyInset = x end
+        elseif k == "ornament" then
+            if type(x) ~= "boolean" then return nil, k end
+            out.ornament = x
+        elseif k == "ornamentTop" then
+            if type(x) ~= "boolean" then return nil, k end
+            out.ornamentTop = x
         elseif k == "northMarker" then
             if type(x) ~= "boolean" then return nil, k end
             out.northMarker = x
@@ -129,6 +148,12 @@ function MM.Validate(v)
             if type(x) ~= "number" or x ~= x or x == math.huge or x == -math.huge then return nil, k end
             out.buttonAngle = x % 360
         end
+    end
+    if legacyInset then
+        local r = MM.LIMITS.ornamentOffsetX
+        local n = math.floor(math.min(r[2], math.max(r[1], -legacyInset)) + 0.5)
+        if out.ornamentOffsetX == nil then out.ornamentOffsetX = n end
+        if out.ornamentOffsetY == nil then out.ornamentOffsetY = n end
     end
     for k, d in pairs(def) do
         if out[k] == nil then out[k] = d end

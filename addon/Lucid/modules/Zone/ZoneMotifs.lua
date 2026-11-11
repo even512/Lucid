@@ -6,7 +6,7 @@
 -- journal/MapSpace.lua, Forever-Build 1.60.1.70170 / Retail 12.1.5.70575). Retail-ID 25 (Vorgebirge des Huegellands)
 -- gehoert zu Huegelland: Retail hat kein eigenes Alteracgebirge. Weitere Retail-Zonen bekommen kein Motiv.
 local _, ns = ...
-local M = { byMap = {}, order = {}, dups = {}, ids = {} } -- ids[motiv] = IDs in Tabellenreihenfolge (erste = Hauptzone)
+local M = { byMap = {}, byName = {}, order = {}, dups = {}, ids = {} } -- ids[motiv] = IDs in Tabellenreihenfolge (erste = Hauptzone)
 ns.ZoneMotifs = M
 
 local function motif(name, ids)
@@ -59,3 +59,13 @@ motif("theramore", { 1445, 70 })                     -- Duestermarschen
 motif("primal", { 1449, 78 })                        -- Krater von Un'Goro
 motif("qiraji", { 1451, 81 })                        -- Silithus
 motif("sky", { 2521, 2665 })                         -- Insel Zephras (nur Forever)
+
+-- Gebiete ohne eigene Karte: Zuordnung ueber den angezeigten Namen (Zeile 1 oder 2 der Karte, exakt). Gilt vor byMap.
+-- Namen, die in deDE und enUS gleich lauten; weitere Sprachen bei Bedarf ergaenzen.
+local function named(name, names)
+    M.order[#M.order + 1] = name
+    M.ids[name] = {}
+    for _, n in ipairs(names) do M.byName[n] = name end
+end
+
+named("dalaran", { "Dalaran" })                     -- Dalaran (Forever: Stadtgebiet im Alteracgebirge ohne eigene Karte)

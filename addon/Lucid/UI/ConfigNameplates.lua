@@ -1,6 +1,6 @@
 -- Reiter "Plaketten" (Spec B7, Oberflaechen-Delta): Ein/Aus, Gegner und Freunde getrennt ("in Ruhe zeigen" + Bedingungen),
 -- Ziel immer zeigen, Sichtweite (Schalter + Regler), weich/hart + Dauer, kleine Voreinstellungen und Hinweise zu Taste V
--- und Instanzen. Alles geht ueber Nameplates.Set/SetMany (geprueft wie beim Import) und wirkt sofort; im Kampf
+-- und Instanzen. Zweite Ansicht "Aussehen" (Plaketten-Stil mit Live-Vorschau): UI/ConfigNameplatesLook.lua. Alles geht ueber Nameplates.Set/SetMany (geprueft wie beim Import) und wirkt sofort; im Kampf
 -- wartet die Sichtweite bis Kampfende. Beschriftungen kommen aus den Locales, der Reiter zeigt keinen Fremdtext.
 local _, ns = ...
 local NP = ns.Nameplates
@@ -32,6 +32,8 @@ local function apply(page, changes)
     Config.Refresh()
     return ok
 end
+Tab.Apply = apply
+Tab.SetStatus = setStatus
 
 --- Bedingungsliste mit/ohne name, in der festen Reihenfolge des Reiters
 local function toggled(list, name, on)
@@ -53,20 +55,20 @@ end
 
 local function buildGroup(page, key, title, x)
     local g = {}
-    local head = W.Header(page, title, 360)
+    local head = W.Header(page.vis, title, 360)
     head:SetPoint("TOPLEFT", x, -78)
-    g.base = W.Check(page, L.UI_NP_BASE, function(v) apply(page, { [key .. ".baseShow"] = v }) end)
+    g.base = W.Check(page.vis, L.UI_NP_BASE, function(v) apply(page, { [key .. ".baseShow"] = v }) end)
     g.base:SetPoint("TOPLEFT", x, -102)
     W.Tooltip(g.base, function() return L.UI_NP_BASE, L.UI_NP_BASE_TIP end)
-    g.keep = W.Check(page, L.UI_NP_KEEP_TARGET, function(v) apply(page, { [key .. ".keepTarget"] = v }) end)
+    g.keep = W.Check(page.vis, L.UI_NP_KEEP_TARGET, function(v) apply(page, { [key .. ".keepTarget"] = v }) end)
     g.keep:SetPoint("TOPLEFT", x, -336)
     W.Tooltip(g.keep, function() return L.UI_NP_KEEP_TARGET, L.UI_NP_KEEP_TARGET_TIP end)
-    g.when = W.Text(page, "GameFontNormalSmall", C.muted)
+    g.when = W.Text(page.vis, "GameFontNormalSmall", C.muted)
     g.when:SetPoint("TOPLEFT", x + 4, -130)
     g.when:SetText(L.UI_NP_WHEN)
     g.checks = {}
     for i, name in ipairs(CONDITIONS) do
-        local cb = W.Check(page, L["STATE_" .. name], function(v)
+        local cb = W.Check(page.vis, L["STATE_" .. name], function(v)
             local cfg = NP.GetConfig()
             apply(page, { [key .. ".conditions"] = toggled(cfg[key].conditions, name, v) })
         end)
@@ -76,6 +78,23 @@ local function buildGroup(page, key, title, x)
         g.checks[name] = cb
     end
     return g
+end
+
+--- Ansicht wechseln: "vis" (Sichtbarkeit), "look" (Aussehen mit Live-Vorschau) oder "far" (Quest-Fernsicht)
+function Tab.SelectView(page, id)
+    if id ~= "vis" and id ~= "look" and id ~= "far" then return false end
+    page.view = id
+    page.vis:SetShown(id == "vis")
+    page.look:SetShown(id == "look")
+    page.far:SetShown(id == "far")
+    page.presetLabel:SetShown(id == "vis")
+    for _, b in pairs(page.presets) do b:SetShown(id == "vis") end
+    for vid, b in pairs(page.views) do
+        b:SetSelected(vid == id)
+        W.Color(b.label, vid == id and C.accent or C.muted)
+    end
+    Config.Refresh()
+    return true
 end
 
 Config.RegisterPage("nameplates", {
@@ -101,41 +120,71 @@ Config.RegisterPage("nameplates", {
             x = x + 116
         end
 
+        -- Ansicht "Sichtbarkeit" (bisheriger Inhalt) in einem Container, daneben "Aussehen" (Plaketten-Stil, Live-Vorschau)
+        page.vis = CreateFrame("Frame", nil, page)
+        page.vis:SetAllPoints(page)
+        page.look = CreateFrame("Frame", nil, page)
+        page.look:SetPoint("TOPLEFT", 0, -72)
+        page.look:SetPoint("BOTTOMRIGHT", 0, 22)
+        page.look:Hide()
+        page.far = CreateFrame("Frame", nil, page)
+        page.far:SetPoint("TOPLEFT", 0, -72)
+        page.far:SetPoint("BOTTOMRIGHT", 0, 22)
+        page.far:Hide()
+        page.views = {}
+        local vx = 0
+        for _, id in ipairs({ "vis", "look", "far" }) do
+            local b = W.FlatButton(page, 130, 24, "GameFontNormal")
+            b:SetPoint("TOPLEFT", vx, -36)
+            b.label:SetText(L["UI_NP_VIEW_" .. id])
+            if b.label.SetJustifyH then b.label:SetJustifyH("CENTER") end
+            b:SetScript("OnClick", function() Tab.SelectView(page, id) end)
+            page.views[id] = b
+            vx = vx + 134
+        end
+        W.Tooltip(page.views.look, function() return L.UI_NP_VIEW_look, L.UI_NP_VIEW_look_TIP end)
+        W.Tooltip(page.views.far, function() return L.UI_NP_VIEW_far, L.UI_NP_VIEW_far_TIP end)
+
         page.enemies = buildGroup(page, "enemies", L.NP_ENEMIES, 0)
         page.friends = buildGroup(page, "friends", L.NP_FRIENDS, 390)
 
-        page.radiusOn = W.Check(page, L.UI_NP_RADIUS, function(v) apply(page, { ["radius.enabled"] = v }) end)
+        page.radiusOn = W.Check(page.vis, L.UI_NP_RADIUS, function(v) apply(page, { ["radius.enabled"] = v }) end)
         page.radiusOn:SetPoint("TOPLEFT", 0, -360)
         W.Tooltip(page.radiusOn, function() return L.UI_NP_RADIUS, L.UI_NP_RADIUS_TIP end)
-        page.radius = W.Slider(page, L.UI_NP_RADIUS_YARDS, NP.RADIUS_MIN, NP.RADIUS_MAX, 1, 340,
+        page.radius = W.Slider(page.vis, L.UI_NP_RADIUS_YARDS, NP.RADIUS_MIN, NP.RADIUS_MAX, 1, 340,
             function(v) return ("%g m"):format(v) end, function(v) apply(page, { ["radius.yards"] = v }) end)
         page.radius:SetPoint("TOPLEFT", 4, -384)
 
-        page.fadeLabel = W.Text(page, "GameFontNormalSmall", C.muted)
+        page.fadeLabel = W.Text(page.vis, "GameFontNormalSmall", C.muted)
         page.fadeLabel:SetPoint("TOPLEFT", 390, -340)
         page.fadeLabel:SetText(L.UI_NP_FADE)
-        page.fade = W.Dropdown(page, 200, function(v) apply(page, { fade = v }) end)
+        page.fade = W.Dropdown(page.vis, 200, function(v) apply(page, { fade = v }) end)
         page.fade:SetPoint("TOPLEFT", 390, -356)
         page.fade:SetOptions({
             { value = "soft", text = L.NP_FADE_soft },
             { value = "hard", text = L.NP_FADE_hard },
         })
         W.Tooltip(page.fade, function() return L.UI_NP_FADE, L.UI_NP_FADE_TIP end)
-        page.duration = W.Slider(page, L.UI_NP_FADE_DURATION, 0, NP.FADE_DURATION_MAX, 0.1, 340,
+        page.duration = W.Slider(page.vis, L.UI_NP_FADE_DURATION, 0, NP.FADE_DURATION_MAX, 0.1, 340,
             function(v) return ("%g s"):format(v) end, function(v) apply(page, { fadeDuration = v }) end)
         page.duration:SetPoint("TOPLEFT", 394, -384)
 
-        page.note = W.Text(page, "GameFontHighlightSmall", C.muted)
+        page.note = W.Text(page.vis, "GameFontHighlightSmall", C.muted)
         page.note:SetPoint("TOPLEFT", 4, -432)
         page.note:SetWidth(740) -- bis zu 4 Zeilen (2 Absaetze), endet spaetestens bei y=-482
         page.note:SetText(L.UI_NP_NOTE_V .. "\n" .. L.UI_NP_NOTE_INSTANCE)
         page.status = W.Text(page, "GameFontHighlightSmall", C.muted)
         page.status:SetPoint("TOPLEFT", 4, -486) -- eine Zeile, endet bei y=-498 (Seite: 504 px)
         page.status:SetWidth(740)
+        ns.NameplateLook.Build(page, page.look)
+        ns.NameplateFarView.Build(page, page.far)
         Tab.page = page
+        Tab.SelectView(page, "vis")
     end,
     refresh = function(page)
         local cfg = NP.GetConfig()
+        if page.view == "look" then ns.NameplateLook.Refresh(page, page.look) end
+        if page.view == "far" then ns.NameplateFarView.Refresh(page, page.far) end
         page.enabled:SetValue(cfg.enabled)
         for key, g in pairs({ enemies = page.enemies, friends = page.friends }) do
             local group = cfg[key]

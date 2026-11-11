@@ -61,6 +61,10 @@ Card.ORN_TINT = { 1, 0.86, 0.55 }
 --              Zone (ZoneMotifs.lua, uiMapID aus card.mapID), sonst gilt zone.ornament (Card.ResolveOrnament)
 -- Einsatz: zone.ornDelay s nach Kartenstart (0 = zusammen mit dem Titel), Einblenden zone.ornFade s (Alpha easeOut,
 -- Wachsen grow -> 1 ueber 1,3 x ornFade); gilt fuer alle Textur-Stile, die schlichten Linien wachsen mit der Karte.
+-- Hoechste Seitenhoehe (UI-Einheiten bei Groesse 100 %) fuer Layout "pair"; je Stil ueberschreibbar per S.maxH.
+Card.PAIR_MAX_H = 230
+-- Mindestabstand (UI-Einheiten) der Zonen-Motive zum oberen/unteren Bildschirmrand
+Card.SCREEN_MARGIN = 8
 -- Stil-Tabelle: kind "sides" (links/rechts vom Titel; Breite factor x Linienlaenge in [min, max], midY = Hoehe der
 -- Strichmitte am inneren Ende), "pair" (wie "sides", aber zwei eigenstaendige Seiten left/right mit je eigenem
 -- aspect/midY/srcW/levels; gleicher Massstab, die breitere Seite bekommt factor x Linienlaenge), "frame" (Rahmen um die Titelzeilen; innerW/innerH = gemessene Innenflaeche als
@@ -96,7 +100,15 @@ function Card.IsMotif(name)
 end
 
 --- Motiv der Zonenkarte mapID (Name) oder nil: Tabelle ZoneMotifs.byMap, unabhaengig davon, ob es geladen ist
-function Card.MotifFor(mapID)
+--- lines (optional): Zeilen der Karte ({ text = ... }); ein Name aus ZoneMotifs.byName geht vor der Karten-ID.
+function Card.MotifFor(mapID, lines)
+    local byName = (ns.ZoneMotifs or {}).byName
+    if type(lines) == "table" and type(byName) == "table" then
+        for _, l in ipairs(lines) do
+            local n = type(l) == "table" and l.text or nil
+            if type(n) == "string" and not Compat.IsSecret(n) and byName[n] then return byName[n] end
+        end
+    end
     local byMap = (ns.ZoneMotifs or {}).byMap
     if type(byMap) ~= "table" or type(mapID) ~= "number" or mapID ~= mapID then return nil end
     return byMap[mapID]
@@ -109,11 +121,11 @@ end
 ---   Automatik aus             => cfg.ornament, "fixed"
 --- loaded(name) -> bool legt fest, ob ein Motiv zeigbar ist (Standard: Stil bekannt; die Karte prueft zusaetzlich,
 --- ob die Textur ladbar ist).
-function Card.ResolveOrnament(cfg, mapID, loaded)
+function Card.ResolveOrnament(cfg, mapID, loaded, lines)
     local fixed = type(cfg) == "table" and cfg.ornament or "swirl"
     if fixed == "none" then return "none", "fixed" end
     if type(cfg) ~= "table" or cfg.autoOrnament == false then return fixed, "fixed" end
-    local motif = Card.MotifFor(mapID)
+    local motif = Card.MotifFor(mapID, lines)
     if motif and (loaded and loaded(motif) or (not loaded and Card.STYLES[motif] ~= nil)) then return motif, "auto" end
     return fixed, "fallback"
 end
@@ -742,6 +754,27 @@ local function sideReach(f, w1, h, dy)
     return need
 end
 
+-- Platz (UI-Einheiten) von der Mitte der Titelzeile bis zum oberen und unteren Bildschirmrand, aus der
+-- Kartenposition f.pos (Zeile 1 haengt oben am Frame; blockH = Hoehe des Textblocks als Naeherung der Framehoehe).
+-- Ohne bekannte Bildschirmhoehe oder Position nil.
+local function titleRoom(f, blockH)
+    local ok, sh = pcall(UIParent.GetHeight, UIParent)
+    sh = ok and Compat.Num(sh) or nil
+    local p, size1 = f.pos, f.line1Size or 44
+    if not (sh and sh > 0 and p and type(p.point) == "string" and tonumber(p.y)) then return nil end
+    blockH = tonumber(blockH) or size1
+    local top -- Abstand Bildschirm-Oberkante -> Frame-Oberkante
+    if p.point:find("TOP") then
+        top = -p.y
+    elseif p.point:find("BOTTOM") then
+        top = sh - p.y - blockH
+    else
+        top = sh / 2 - p.y - blockH / 2
+    end
+    local above = top + size1 / 2
+    return above, sh - above
+end
+
 -- Verkleinerungsfaktor (<= 1), damit eine Karte mit Seiten-Ornamenten (innere Kante bei half + gap, Seitenbreite
 -- widest) nicht breiter als der Bildschirm wird; ohne bekannte Bildschirmbreite 1
 local function screenShrink(half, gap, widest)
@@ -805,6 +838,25 @@ local function setOrnament(f, style, k, w1, lastLine, linesH)
         end
         local wr, hr = size(R)
         local wl, hl = size(Lf)
+        -- Hoehenbremse: fast quadratische Motive (z. B. Vorgebirge von Hillsbrad) wuerden bei voller Breite so hoch
+        -- wie breit und ragten aus dem sichtbaren Bereich. Beide Seiten gleich verkleinern, bis die hoehere passt.
+        -- Dazu der echte Platz bis zum oberen/unteren Bildschirmrand (Kartenposition): ueber der Titelmitte liegt
+        -- midY x h der Seite, darunter (1 - midY) x h.
+        local hCap = (S.maxH or Card.PAIR_MAX_H) * k
+        local c = 1
+        local function limit(h, mid)
+            if h <= 0 then return end
+            c = math.min(c, hCap / h)
+            local above, below = titleRoom(f, linesH)
+            if above then
+                local m = Card.SCREEN_MARGIN
+                if mid > 0 then c = math.min(c, math.max(0.05, (above - m) / (mid * h))) end
+                if mid < 1 then c = math.min(c, math.max(0.05, (below - m) / ((1 - mid) * h))) end
+            end
+        end
+        limit(hr, R.midY)
+        limit(hl, Lf.midY)
+        if c < 1 then wr, hr, wl, hl = wr * c, hr * c, wl * c, hl * c end
         -- Abstand nach der breitesten Textzeile neben den Seiten (Zeile 1, Zeile 2, Untertitel; Seitenmitte auf
         -- (midY - 0,5) x Hoehe). Beide Seiten bekommen den groesseren Zuschlag (symmetrisch); Groesse/Breite der
         -- Seiten bleiben nach Zeile 1.
@@ -960,7 +1012,7 @@ local function layout(f, card, cfg)
         style, mode = card.motif, "test"
         if not (Card.STYLES[style] and ensureStyle(f, style)) then style, mode = "simple", "missing" end
     elseif f.ornLen then
-        style, mode = Card.ResolveOrnament(cfg, card.mapID, function(name) return ensureStyle(f, name) end)
+        style, mode = Card.ResolveOrnament(cfg, card.mapID, function(name) return ensureStyle(f, name) end, card.lines)
         -- Textur des gewaehlten Stils nicht ladbar => schlicht (auch beim festen Stil, wie bisher)
         if Card.STYLES[style] and not ensureStyle(f, style) then style = "simple" end
     end

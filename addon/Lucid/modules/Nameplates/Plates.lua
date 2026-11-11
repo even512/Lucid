@@ -21,6 +21,12 @@ local mode = nil                                   -- nil = aus; sonst { vis = {
 local driver                                       -- Frame mit OnUpdate
 local running = false
 
+local listeners = {} -- fn(uf, targetAlpha|nil, unit|nil): Quest-Fernsicht (QuestFar.lua) und Stil-Treiber (Style.lua)
+
+local function notify(uf, target, unit)
+    for _, fn in ipairs(listeners) do pcall(fn, uf, target, unit) end
+end
+
 local function call(fn, ...)
     local ok, v = pcall(fn, ...)
     if not ok or Compat.IsSecret(v) then return nil end
@@ -100,6 +106,7 @@ end
 
 local function retarget(uf, st)
     st.target = targetAlpha(st.unit, st.group)
+    notify(uf, st.target, st.unit)
     if st.cur ~= st.target and mode.duration <= 0 then
         st.cur = st.target -- Dauer 0: sofort
         setAlpha(uf, st.cur)
@@ -119,6 +126,7 @@ local function track(unit, fresh)
     st.unit, st.group = unit, groupOf(unit)
     byUnit[unit] = uf
     st.target = targetAlpha(unit, st.group)
+    notify(uf, st.target, unit)
     -- neue Plaketten blenden ein (Frames werden gepoolt: der Startwert gilt fuer die neue Einheit)
     if fresh and mode and mode.duration > 0 and st.target == 1 then st.cur = 0 elseif fresh then st.cur = st.target end
     setAlpha(uf, st.cur)
@@ -130,6 +138,7 @@ local function untrack(unit)
     byUnit[unit] = nil
     if uf and tracked[uf] then
         tracked[uf] = nil
+        notify(uf, nil, nil)
         setAlpha(uf, 1) -- Pool-Reset: der Frame wird fuer eine andere Einheit wiederverwendet
     end
 end
@@ -151,6 +160,7 @@ function Plates.Reset()
     for uf in pairs(tracked) do
         setAlpha(uf, 1)
         tracked[uf] = nil
+        notify(uf, nil, nil)
     end
     byUnit = {}
     running = false
@@ -171,6 +181,30 @@ function Plates.Update(spec)
 end
 
 function Plates.IsActive() return mode ~= nil end
+
+--- Ziel-Alpha einer verfolgten Plakette (0 = nach B7 unsichtbar, 1 = sichtbar) oder nil (nicht verfolgt)
+function Plates.TargetAlpha(uf)
+    local st = tracked[uf]
+    return st and st.target or nil
+end
+
+--- Zuhoerer fuer Sichtbarkeitswechsel anmelden (einmalig je Funktion)
+function Plates.AddListener(fn)
+    for _, f in ipairs(listeners) do if f == fn then return end end
+    listeners[#listeners + 1] = fn
+end
+
+--- true, wenn Lucid die Plakette (UnitFrame) gerade ganz ausgeblendet haelt (Alpha 0 und Ziel 0, also auch nicht im Einblenden)
+function Plates.IsHidden(uf)
+    local st = tracked[uf]
+    return st ~= nil and st.cur == 0 and st.target == 0
+end
+
+--- aktuelles Lucid-Alpha einer verfolgten Plakette (UnitFrame) oder nil (nicht verfolgt); fuer die Klick-Probe
+function Plates.CurrentAlpha(uf)
+    local st = tracked[uf]
+    return st and st.cur or nil
+end
 
 --- Diagnose: Anzahl verfolgter Plaketten, davon gerade im Uebergang
 function Plates.Counts()

@@ -36,6 +36,9 @@ difficulty, expansion button, addon compartment, zoom buttons and addon icons ca
 Lucid has its own minimap button: left-click opens the window, right-click opens a menu for presets, camera, map and zone
 text, and you can drag it along the edge.
 
+Minimap zone ornament. With the rectangular 4:3 shape, a golden ornament changes with the zone (43 motifs) and wraps the top
+and right of the map around the sun or moon; size, opacity and position are adjustable (`/lucid minimap ornament on|off`).
+
 World map. The Lucid map mode turns the world map into a slim window in the same frame style, with a choice of hiding the
 header and Blizzard's window frame, a quest list that is hidden, collapsible or always shown, opacity, and a lower opacity
 while you move. The map key can open it, and Blizzard's large map is on Shift plus the key if that combination is free.
@@ -45,6 +48,16 @@ and scale the window through its settings or leave that to Open Map.
 Nameplates. Lucid shows nameplates only in the states you pick, for example in combat or with a target, and can always show
 your target's nameplate. Fading is soft or hard, and the view distance can be limited. Two presets, "Combat only" and
 "Combat and target", set this up.
+
+Nameplate style (optional, off by default). A second view "Appearance" in the Nameplates tab gives Blizzard's nameplates an
+immersive look: bronze frame, living fill, ember colours, own name font, level plaque with elite/rare dragon and boss skull,
+quest objective icons (with Questie, otherwise a "!"), bar on demand, a low-health glimmer, depth, a styled cast bar, equal
+plate size with an adjustable target size. Presets "Subtle", "Immersive" and "Cinematic" set the building blocks; a live preview
+shows every change. If another nameplate addon (Plater, Kui, TidyPlates, ElvUI, Platynator) is loaded, the style stays off.
+
+Quest far view (optional, off by default). Quest enemies that are too far away for a visible nameplate show only their quest
+symbol (range about 20 to 45 yards in Forever, 20 to 60 in Retail); the invisible nameplates do not catch clicks.
+`/lucid nameplates far test` tries it on all enemies nearby.
 
 Camera. Presets set the Action Cam values and zoom distances per state: Cinematic, Cinematic calm, Cinematic dynamic, Classic
 and Wide in combat. Shoulder offset, dynamic pitch, head movement, target focus and zoom can be set in the Camera tab, with
@@ -78,13 +91,13 @@ well. These commands are available in the game:
 | `/lucid chat fade on\|off` | fade out chat messages one by one |
 | `/lucid chat time <sec>` | how long a message stays visible (1 to 600 seconds) |
 | `/lucid zone` | status of the zone text; `zone on\|off`, `zone test [zone\|subzone\|discovery\|<motif>\|all\|stop]`, `zone move`, `zone seed` |
-| `/lucid minimap` | `minimap shape <round\|square\|rect> [ratio]`, `minimap scale`, `minimap border`, `minimap bordersize`, `minimap north on\|off`, `minimap button [on\|off]` |
-| `/lucid nameplates` | `on`, `off`, `status`, `preset <combat\|combattarget\|off>` |
+| `/lucid minimap` | `minimap shape <round\|square\|rect> [ratio]`, `minimap scale`, `minimap border`, `minimap bordersize`, `minimap north on\|off`, `minimap button [on\|off]`, `minimap ornament on\|off` |
+| `/lucid nameplates` | `on`, `off`, `status`, `preset <combat\|combattarget\|off>`, `style on\|off\|subtle\|immersive\|cinematic` (also `style test`, `style panel`), `far on\|off\|test` |
 | `/lucid camera` | `on`, `off`, `status`, `preset <cinematic\|cinematicCalm\|cinematicDynamic\|classic\|combatwide>` |
 | `/lucid map [on\|off\|status]` | Lucid map mode for the world map |
 
 For troubleshooting there are `/lucid nameplates probe`, `/lucid camera probe`, `/lucid map probe`, `/lucid zone debug`
-and `/lucid minimap debug`, as well as `debug` for nameplates and camera. They print what the addon found. The map probe
+and `/lucid minimap debug` (the output opens in a copy window), as well as `debug` for nameplates and camera. They print what the addon found. The map probe
 also runs short write tests on the map and puts the values back right away. You do not need them in normal play.
 
 ## Compatibility

@@ -1,6 +1,7 @@
 -- Reiter "Minimap" (Spec B6, Oberflaechen-Delta): zwei Ansichten.
 --  Karte:    Form (rund | quadratisch | rechteckig), Seitenverhaeltnis (nur bei rechteckig), Rahmenstil (inkl. "ohne"),
---            Rahmenstaerke, Groesse, N-Markierung.
+--            Rahmenstaerke, Groesse, N-Markierung; Abschnitt Zonen-Ornament (Schalter, Groesse, Deckkraft, horizontal/vertikal verschieben, ueber Sonne und Mond legen; nur
+--            Rechteck 4:3, Ornament.lua).
 --  Elemente: (M6) je Element Sichtbarkeit Immer | Maus darueber | Aus (Standortname, Uhr, Kalender, Post, Tracking,
 --            Schwierigkeit, Expansion-Knopf, Addon-Fach, Zoom-Knoepfe, Addon-Knoepfe), Lage von Standortname und Uhr
 --            (Blizzard | oben | unten im Rahmen), Schriftgroesse, Bronze-Ton.
@@ -134,6 +135,37 @@ Config.RegisterPage("minimap", {
         page.note:SetText(L.UI_MINIMAP_NOTE)
         gm[#gm + 1] = page.note
 
+        -- Abschnitt Zonen-Ornament (Ornament.lua): Schalter und drei Regler, live; wirkt nur bei Rechteck 4:3
+        page.ornLabel = label(page, gm, L.UI_MINIMAP_ORN, 4, -306)
+        page.orn = W.Check(page, L.UI_MINIMAP_ORN_ON, function(on) update(page, { ornament = on }) end)
+        page.orn:SetPoint("TOPLEFT", 4, -324)
+        W.Tooltip(page.orn, function() return L.UI_MINIMAP_ORN_ON, L.UI_MINIMAP_ORN_ON_TIP end)
+        gm[#gm + 1] = page.orn
+        page.ornHint = W.Text(page, "GameFontHighlightSmall", C.muted)
+        page.ornHint:SetPoint("TOPLEFT", 300, -328)
+        page.ornHint:SetWidth(320)
+        page.ornHint:SetText(L.UI_MINIMAP_ORN_HINT)
+        gm[#gm + 1] = page.ornHint
+        local function ornSlider(key, step, fmt, x, y)
+            local lim = MM.LIMITS[key]
+            local labelKey = ({ ornamentSize = "UI_MINIMAP_ORN_SIZE", ornamentOffsetX = "UI_MINIMAP_ORN_OFFX",
+                ornamentOffsetY = "UI_MINIMAP_ORN_OFFY",
+                ornamentAlpha = "UI_MINIMAP_ORN_ALPHA" })[key]
+            local sl = W.Slider(page, L[labelKey], lim[1], lim[2], step, 220, fmt, function(v) update(page, { [key] = v }) end)
+            sl:SetPoint("TOPLEFT", x, y)
+            W.Tooltip(sl, function() return L[labelKey], L[labelKey .. "_TIP"] end)
+            gm[#gm + 1] = sl
+            return sl
+        end
+        page.ornSize = ornSlider("ornamentSize", 5, pct, 4, -360)
+        page.ornAlpha = ornSlider("ornamentAlpha", 5, pct, 300, -360)
+        page.ornOffX = ornSlider("ornamentOffsetX", 1, px, 4, -414)
+        page.ornOffY = ornSlider("ornamentOffsetY", 1, px, 300, -414)
+        page.ornTop = W.Check(page, L.UI_MINIMAP_ORN_TOP, function(on) update(page, { ornamentTop = on }) end)
+        page.ornTop:SetPoint("TOPLEFT", 4, -458)
+        W.Tooltip(page.ornTop, function() return L.UI_MINIMAP_ORN_TOP, L.UI_MINIMAP_ORN_TOP_TIP end)
+        gm[#gm + 1] = page.ornTop
+
         -- Ansicht Elemente: Sichtbarkeit je Element (drei Spalten)
         local visOptions = {}
         for _, v in ipairs(MM.VIS) do visOptions[#visOptions + 1] = { value = v, text = L["MINIMAP_VIS_" .. v] } end
@@ -184,7 +216,7 @@ Config.RegisterPage("minimap", {
         ge[#ge + 1] = page.elementsNote
 
         page.status = W.Text(page, "GameFontHighlightSmall", C.muted)
-        page.status:SetPoint("TOPLEFT", 4, -470)
+        page.status:SetPoint("TOPLEFT", 4, -494)
         page.status:SetWidth(620)
         MinimapTab.page = page
     end,
@@ -211,6 +243,16 @@ Config.RegisterPage("minimap", {
         page.scale:SetValue(cfg.scale)
         page.north:SetValue(cfg.northMarker)
         page.button:SetValue(cfg.button)
+        local ornFits = cfg.shape == "rect" and cfg.rectRatio == "4:3"
+        page.orn:SetValue(cfg.ornament)
+        page.ornSize:SetValue(cfg.ornamentSize)
+        page.ornOffX:SetValue(cfg.ornamentOffsetX)
+        page.ornOffY:SetValue(cfg.ornamentOffsetY)
+        page.ornAlpha:SetValue(cfg.ornamentAlpha)
+        page.ornTop:SetValue(cfg.ornamentTop)
+        page.ornTop:SetActive(cfg.ornament and ornFits)
+        for _, sl in ipairs({ page.ornSize, page.ornOffX, page.ornOffY, page.ornAlpha }) do sl:SetActive(cfg.ornament and ornFits) end
+        W.Color(page.ornHint, ornFits and C.muted or C.warn)
         for key, dd in pairs(page.el) do dd:SetValue(el[key]) end
         for key, dd in pairs(page.pos) do
             dd:SetValue(el[key .. "Pos"])

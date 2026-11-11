@@ -27,9 +27,12 @@ do
 end
 local L = ns.L
 
+-- ns.printSink: optionaler Mitschreiber (UI/CopyBox.lua); Print bleibt im Chat sichtbar und gibt die Zeile zusaetzlich weiter.
 function ns.Print(fmt, ...)
     local msg = select("#", ...) > 0 and fmt:format(...) or fmt
     print("|cff9fd8ffLucid|r: " .. msg)
+    local sink = ns.printSink
+    if sink then pcall(sink, msg) end
 end
 
 -- Fehler eines Handlers stoppen nie die anderen; Meldung samt Stack geht an den Fehler-Handler des Clients.
@@ -145,5 +148,12 @@ SlashCmdList.LUCID = function(msg)
     cmd = cmd:lower()
     if cmd == "" then cmd = "help" end
     local fn = commands[cmd]
-    if fn then fn(rest) else ns.Print(L.UNKNOWN_COMMAND, cmd) end
+    if not fn then
+        ns.Print(L.UNKNOWN_COMMAND, cmd)
+    elseif ns.CopyBox and ns.CopyBox.Wants(rest) then
+        -- Probe-/Debug-Ausgaben zusaetzlich im Kopierfenster (Chat-Text laesst sich in WoW nicht kopieren)
+        ns.CopyBox.Capture("/lucid " .. cmd .. (rest ~= "" and (" " .. rest) or ""), fn, rest)
+    else
+        fn(rest)
+    end
 end
